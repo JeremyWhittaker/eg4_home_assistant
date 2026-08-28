@@ -27,6 +27,6 @@ Status values: `implemented`, `blocked`, `deferred`, or `not applicable`.
 | Automatic rollback and explicit restore | implemented | Transaction unit tests plus checksum/drift-guarded `--restore` |
 | Token absent from logs/backups/repo | implemented | Environment-only auth; backup schema omits token; secret scan required at closeout |
 | `noindex`, canonical, and robots | not applicable | Private Home Assistant authenticated panel, not a public website |
-| Commit and push | blocked | All task work is committed locally; no Git remote is configured, so push is unavailable |
+| Commit and push | implemented | GitHub `origin` configured; clean local `main` tracks and matches `origin/main` |
 
 The final browser report records five allowed external errors from globally loaded Frigate/HACS frontend code: four duplicate `focus-trap` registrations and one source-map 404. None originates from or affects this native dashboard; all dashboard routes contain zero Lovelace error cards.
