@@ -147,9 +147,12 @@ async function restorePrior(ws, { createdId, existing, existingConfig }) {
   });
 }
 
-export async function applyDashboard({ ws, existing, existingConfig, candidate, metadata }) {
+export async function applyDashboard({ ws, existing, existingConfig, candidate, metadata, verify }) {
   const plan = planDashboard({ existing, existingConfig, candidate, metadata });
-  if (plan.action === "unchanged") return { ...plan, dashboardId: existing.id };
+  if (plan.action === "unchanged") {
+    if (verify) await verify();
+    return { ...plan, dashboardId: existing.id };
+  }
   let createdId = null;
   try {
     if (!existing) {
@@ -161,6 +164,7 @@ export async function applyDashboard({ ws, existing, existingConfig, candidate, 
       });
       createdId = created.id;
       await ws.call({ type: "lovelace/config/save", url_path: metadata.urlPath, config: candidate });
+      if (verify) await verify();
       return { ...plan, dashboardId: createdId };
     }
     if (plan.configChanged) {
@@ -173,6 +177,7 @@ export async function applyDashboard({ ws, existing, existingConfig, candidate, 
         ...metadataPayload(metadata),
       });
     }
+    if (verify) await verify();
     return { ...plan, dashboardId: existing.id };
   } catch (error) {
     try {
@@ -218,7 +223,8 @@ export async function restoreBackup({ ws, backup, force = false }) {
   const priorMatches = backup.prior
     && current
     && current.mode === "storage"
-    && checksum(currentConfig) === backup.prior.checksum;
+    && checksum(currentConfig) === backup.prior.checksum
+    && METADATA_FIELDS.every((field) => (current[field] ?? null) === (backup.prior.metadata[field] ?? null));
   if (priorMatches) return { action: "already-restored" };
   if (!deployedMatches && !force) {
     throw new Error("Current dashboard has drifted since this backup; refusing to overwrite it without --force-restore");
@@ -265,4 +271,3 @@ export function verifyEnergyPreferences(preferences, entities) {
   if (errors.length) throw new Error(`Home Assistant Energy configuration is not bound to the selected EG4: ${errors.join("; ")}`);
   return { sourceTypes: [...required.keys()] };
 }
-

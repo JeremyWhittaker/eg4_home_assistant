@@ -1,3 +1,5 @@
+import { readFileSync, rmSync, statSync } from "node:fs";
+import { dirname } from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 
@@ -5,8 +7,11 @@ import { buildDashboard, dashboardMetadata } from "../src/dashboard.mjs";
 import { discoveryContract, discoverEg4 } from "../src/discovery.mjs";
 import {
   applyDashboard,
+  createBackup,
   collectEntityReferences,
+  loadBackup,
   planDashboard,
+  restoreBackup,
   stableString,
   validateDashboard,
   verifyEnergyPreferences,
@@ -100,10 +105,14 @@ class FakeWs {
   constructor({ failOn } = {}) {
     this.calls = [];
     this.failOn = failOn;
+    this.failed = false;
   }
   async call(command) {
     this.calls.push(structuredClone(command));
-    if (this.failOn && command.type === this.failOn) throw new Error("injected failure");
+    if (this.failOn && command.type === this.failOn && !this.failed) {
+      this.failed = true;
+      throw new Error("injected failure");
+    }
     if (command.type === "lovelace/dashboards/create") return { id: "eg4_energy" };
     return null;
   }
@@ -135,3 +144,78 @@ test("deployment creates, updates, skips unchanged, and rolls back a failed crea
   assert.deepEqual(failing.calls.map((call) => call.type), ["lovelace/dashboards/create", "lovelace/config/save", "lovelace/dashboards/delete"]);
 });
 
+test("post-save verification failure rolls back an existing dashboard", async () => {
+  const metadata = dashboardMetadata;
+  const previous = { views: [{ title: "Previous", path: "previous" }] };
+  const candidate = { views: [{ title: "Live", path: "live" }] };
+  const existing = {
+    id: "eg4_energy",
+    url_path: metadata.urlPath,
+    mode: "storage",
+    title: "Old title",
+    icon: "mdi:old",
+    show_in_sidebar: false,
+    require_admin: true,
+  };
+  const ws = new FakeWs();
+  await assert.rejects(
+    applyDashboard({
+      ws,
+      existing,
+      existingConfig: previous,
+      candidate,
+      metadata,
+      verify: async () => { throw new Error("round-trip mismatch"); },
+    }),
+    /automatic rollback completed/,
+  );
+  assert.deepEqual(ws.calls.map((call) => call.type), [
+    "lovelace/config/save",
+    "lovelace/dashboards/update",
+    "lovelace/config/save",
+    "lovelace/dashboards/update",
+  ]);
+  assert.deepEqual(ws.calls[2].config, previous);
+  assert.equal(ws.calls[3].title, "Old title");
+});
+
+test("backup is private, checksummed, token-free, and restore refuses drift", async () => {
+  const candidate = { views: [{ title: "Live", path: "live" }] };
+  const created = createBackup({
+    baseUrl: "https://ha.invalid",
+    haVersion: "2026.8.3",
+    metadata: dashboardMetadata,
+    existing: null,
+    existingConfig: null,
+    candidate,
+  });
+  try {
+    assert.equal(statSync(created.path).mode & 0o777, 0o600);
+    assert.ok(!readFileSync(created.path, "utf8").includes("super-secret-token"));
+    const backup = loadBackup(created.path);
+    const driftedWs = {
+      async call(command) {
+        if (command.type === "lovelace/dashboards/list") {
+          return [{ id: "eg4_energy", url_path: backup.dashboard_path, mode: "storage", ...backup.deployed.metadata }];
+        }
+        if (command.type === "lovelace/config") return { views: [{ title: "Operator edit", path: "edited" }] };
+        throw new Error(`unexpected command ${command.type}`);
+      },
+    };
+    await assert.rejects(restoreBackup({ ws: driftedWs, backup }), /has drifted/);
+  } finally {
+    rmSync(dirname(created.path), { recursive: true, force: true });
+  }
+});
+
+test("same-path YAML dashboard is rejected before mutation", () => {
+  assert.throws(
+    () => planDashboard({
+      existing: { url_path: dashboardMetadata.urlPath, mode: "yaml" },
+      existingConfig: null,
+      candidate: { views: [] },
+      metadata: dashboardMetadata,
+    }),
+    /refusing to replace/,
+  );
+});

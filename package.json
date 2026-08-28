@@ -8,8 +8,9 @@
     "node": ">=22"
   },
   "scripts": {
-    "check": "node --check deploy.mjs && node --check src/dashboard.mjs && node --check src/deployer.mjs && node --check src/discovery.mjs && node --check src/ha-client.mjs && node --test",
-    "test": "node --test"
+    "check": "node --check deploy.mjs && node --check src/dashboard.mjs && node --check src/deployer.mjs && node --check src/discovery.mjs && node --check src/ha-client.mjs && node --check scripts/visual-qa.mjs && node --test",
+    "test": "node --test",
+    "qa:visual": "node scripts/visual-qa.mjs"
   }
 }
 

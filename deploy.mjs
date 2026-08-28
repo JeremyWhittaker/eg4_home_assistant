@@ -113,8 +113,8 @@ async function main() {
       existingConfig,
       candidate,
       metadata: dashboardMetadata,
+      verify: () => verifyDashboard({ ws: client, metadata: dashboardMetadata, candidate }),
     });
-    await verifyDashboard({ ws: client, metadata: dashboardMetadata, candidate });
     console.log(`deployment-ok action=${result.action} dashboard=${dashboardMetadata.urlPath} views=${validation.viewCount} entities=${validation.references.length}`);
   } finally {
     client.close();
@@ -125,4 +125,3 @@ main().catch((error) => {
   console.error(`ERROR: ${error.message}`);
   process.exitCode = 1;
 });
-
