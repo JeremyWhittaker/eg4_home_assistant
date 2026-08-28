@@ -1,0 +1,15 @@
+{
+  "name": "eg4-home-assistant-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Native, read-only EG4 solar and battery dashboard for Home Assistant",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "check": "node --check deploy.mjs && node --check src/dashboard.mjs && node --check src/deployer.mjs && node --check src/discovery.mjs && node --check src/ha-client.mjs && node --test",
+    "test": "node --test"
+  }
+}
+

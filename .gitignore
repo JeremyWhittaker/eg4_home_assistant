@@ -1,0 +1,6 @@
+.env
+.foreman/
+node_modules/
+artifacts/
+*.log
+
