@@ -55,7 +55,7 @@ Home Assistant Energy preferences already bind the same selected inverter to:
 
 The configured sources do not define `stat_rate` power entities. Home Assistant's native `power-sankey` and `power-sources-graph` require those optional rate inputs, so this project deliberately omits both rather than installing cards with empty live flow. It also does not alter the user's existing Energy preferences.
 
-The Live view uses direct EG4 power entities in the native distribution, tiles, narrative, and history cards. The Energy view uses the lifetime-backed `energy-sankey`, distribution, balance, self-sufficiency, usage, solar, and source-total cards. This keeps every visualization populated while remaining responsive, theme-aware, and free of HACS dependencies.
+The Live view uses direct EG4 power entities in the native distribution, tiles, narrative, and history cards. The Energy view uses the lifetime-backed `energy-sankey`, distribution, balance, self-sufficiency, usage, and solar cards, plus a friendly-name lifetime totals card. This keeps every visualization populated without exposing serial-heavy statistics labels, while remaining responsive, theme-aware, and free of HACS dependencies.
 
 The deployer requires the lifetime binding during preflight rather than silently showing empty historical Energy cards. It also asks Home Assistant to render the dashboard's Jinja template before any dashboard write, catching server-side template errors against live entities.
 
@@ -71,3 +71,11 @@ The panel separates questions by time horizon:
 Primary values are solar production, home load, grid direction, battery power/SOC, operating state, and telemetry health. Detailed electrical/BMS values are kept out of the first view to preserve an at-a-glance hierarchy.
 
 Solar uses amber, home load uses the active Home Assistant theme, battery uses its semantic battery icons, and grid direction is always labeled as import/export. Status never relies on color alone.
+
+## Live deployment and verification
+
+The `eg4-energy` storage dashboard was created and then polished transactionally on 2026-08-28. Each write produced a mode-0600 rollback backup, round-tripped the saved metadata/configuration, and a final preflight reported `action=unchanged`.
+
+The final browser gate rendered all four routes at desktop and mobile widths, repeated Live and Energy in light and dark modes, and captured 37 overlapping screenshots covering each view from top to bottom. The report found the sidebar link, at least 57 rendered dashboard elements per capture, no login redirects, no Lovelace error cards, and no actionable browser errors. Home Assistant's system log contained no dashboard-, Lovelace-, template-, or relevant energy-card error entry after deployment.
+
+Five frontend errors were classified as pre-existing external HACS-resource noise: duplicate `focus-trap` registration from the globally loaded Frigate card and its associated source-map 404. The dashboard itself uses only native cards and does not load or reference that resource.

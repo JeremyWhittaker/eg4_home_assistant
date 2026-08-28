@@ -124,10 +124,17 @@ async function waitForLoad(session, action) {
   });
   await action();
   if (!loaded) {
-    await Promise.race([
-      promise,
-      pause(LOAD_TIMEOUT_MS).then(() => { throw new Error("Home Assistant page load timed out"); }),
-    ]);
+    let timer;
+    try {
+      await Promise.race([
+        promise,
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error("Home Assistant page load timed out")), LOAD_TIMEOUT_MS);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }
 
@@ -164,9 +171,17 @@ const INSPECTION_EXPRESSION = `(() => {
 })()`;
 
 async function evaluate(session, expression) {
-  const result = await session.call("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true });
-  if (result.exceptionDetails) throw new Error(result.exceptionDetails.text || "Browser evaluation failed");
-  return result.result.value;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const result = await session.call("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true });
+      if (result.exceptionDetails) throw new Error(result.exceptionDetails.text || "Browser evaluation failed");
+      return result.result.value;
+    } catch (error) {
+      if (attempt === 2 || !String(error.message).includes("Inspected target navigated or closed")) throw error;
+      await pause(250);
+    }
+  }
+  throw new Error("Browser evaluation retries were exhausted");
 }
 
 async function waitForDashboard(session, expectedPath) {
@@ -295,23 +310,43 @@ async function main() {
   let session;
   try {
     await waitForJson(`http://127.0.0.1:${port}/json/version`);
-    const page = await fetch(`http://127.0.0.1:${port}/json/new?${encodeURIComponent(`${baseUrl}/`)}`, { method: "PUT" }).then((response) => response.json());
+    const page = await fetch(`http://127.0.0.1:${port}/json/new?${encodeURIComponent("about:blank")}`, { method: "PUT" }).then((response) => response.json());
     session = new CdpSession(page.webSocketDebuggerUrl);
     await session.connect();
     await Promise.all([
       session.call("Page.enable"),
       session.call("Runtime.enable"),
       session.call("Log.enable"),
+      session.call("Network.enable"),
     ]);
-    const consoleErrors = [];
+    const browserErrors = [];
     session.on("Log.entryAdded", ({ entry }) => {
-      if (entry?.level === "error") consoleErrors.push(String(entry.text).slice(0, 500));
+      if (entry?.level !== "error" || String(entry.text).startsWith("Failed to load resource:")) return;
+      browserErrors.push({
+        kind: "log",
+        source: entry.source ?? null,
+        url: entry.url ?? null,
+        text: String(entry.text).slice(0, 500),
+      });
     });
     session.on("Runtime.exceptionThrown", ({ exceptionDetails }) => {
       const text = exceptionDetails?.exception?.description ?? exceptionDetails?.text;
-      if (text) consoleErrors.push(String(text).slice(0, 500));
+      if (text) browserErrors.push({
+        kind: "exception",
+        url: exceptionDetails?.url ?? null,
+        text: String(text).slice(0, 500),
+      });
+    });
+    session.on("Network.responseReceived", ({ response }) => {
+      if (response?.status >= 400) browserErrors.push({
+        kind: "http",
+        status: response.status,
+        url: String(response.url).slice(0, 500),
+        text: response.statusText ?? "",
+      });
     });
 
+    await waitForLoad(session, () => session.call("Page.navigate", { url: `${baseUrl}/` }));
     await waitForDashboardOrigin(session, baseUrl);
     const authData = {
       hassUrl: baseUrl,
@@ -322,7 +357,7 @@ async function main() {
       expires_in: 1e11,
     };
     await evaluate(session, `localStorage.setItem('hassTokens', ${JSON.stringify(JSON.stringify(authData))}); true`);
-    consoleErrors.length = 0;
+    browserErrors.length = 0;
 
     const captures = [];
     const desktop = { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false };
@@ -340,21 +375,33 @@ async function main() {
     for (const captureCase of cases) {
       captures.push(await screenshot(session, { baseUrl, outputDir, ...captureCase }));
     }
-    const uniqueConsoleErrors = [...new Set(consoleErrors)];
+    const uniqueBrowserErrors = [...new Map(browserErrors.map((error) => [JSON.stringify(error), error])).values()];
+    const allowedExternalErrors = uniqueBrowserErrors.filter((error) => {
+      const combined = `${error.url ?? ""} ${error.text ?? ""}`;
+      const unrelatedHacsFocusTrap = String(error.text).includes('the name "focus-trap" has already been used')
+        && ["/hacsfiles/advanced-camera-card/", "/hacsfiles/frigate-hass-card/"]
+          .some((resource) => combined.includes(resource));
+      const unrelatedSourceMapMiss = error.kind === "http"
+        && error.status === 404
+        && new URL(error.url).pathname === "/unknown/node_modules/@webcomponents/scoped-custom-element-registry/src/scoped-custom-element-registry.ts";
+      return unrelatedHacsFocusTrap || unrelatedSourceMapMiss;
+    });
+    const actionableErrors = uniqueBrowserErrors.filter((error) => !allowedExternalErrors.includes(error));
     const report = {
       checked_at: new Date().toISOString(),
       dashboard_path: dashboardMetadata.urlPath,
       captures,
-      console_errors: uniqueConsoleErrors,
+      browser_errors: actionableErrors,
+      allowed_external_errors: allowedExternalErrors,
     };
     const reportPath = join(outputDir, "report.json");
     writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
-    if (uniqueConsoleErrors.length) throw new Error(`Browser logged ${uniqueConsoleErrors.length} error(s); inspect ${reportPath}`);
+    if (actionableErrors.length) throw new Error(`Browser logged ${actionableErrors.length} actionable error(s); inspect ${reportPath}`);
     if (!captures.some((capture) => capture.segments.some((segment) => segment.inspection.hasDashboardNav))) {
       throw new Error(`Sidebar link for ${dashboardMetadata.urlPath} was not found; inspect ${reportPath}`);
     }
     const screenshotCount = captures.reduce((total, capture) => total + capture.segments.length, 0);
-    console.log(`visual-qa-ok routes=4 captures=${captures.length} screenshots=${screenshotCount} themes=light+dark report=${reportPath} console_errors=0`);
+    console.log(`visual-qa-ok routes=4 captures=${captures.length} screenshots=${screenshotCount} themes=light+dark report=${reportPath} actionable_errors=0 allowed_external_errors=${allowedExternalErrors.length}`);
   } finally {
     session?.close();
     await stopBrowser(browser);

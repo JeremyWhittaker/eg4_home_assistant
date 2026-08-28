@@ -57,7 +57,7 @@ One or more live readings are unavailable. Values below are left unavailable—n
 {% endif %}
 Producing **{{ (pv / 1000) | round(1) }} kW** for a **{{ (load / 1000) | round(1) }} kW** home load.
 {% if exported > 50 %}Exporting **{{ (exported / 1000) | round(1) }} kW** to the grid.{% elif imported > 50 %}Importing **{{ (imported / 1000) | round(1) }} kW** from the grid.{% else %}Grid exchange is effectively neutral.{% endif %}
-Battery is **{{ soc | round(0) }}%** and {% if battery > 50 %}charging at **{{ (battery / 1000) | round(1) }} kW**{% elif battery < -50 %}discharging at **{{ ((battery | abs) / 1000) | round(1) }} kW**{% else %}standing by{% endif %}. · **Mode:** {{ states('${e.operatingState}') }}
+Battery is **{{ soc | round(0) }}%** and {% if battery > 50 %}charging at **{{ (battery / 1000) | round(1) }} kW**{% elif battery < -50 %}discharging at **{{ ((battery | abs) / 1000) | round(1) }} kW**{% else %}standing by{% endif %}. · **Mode:** {{ state_translated('${e.operatingState}') }}
 {% endif %}`;
 }
 
@@ -115,7 +115,7 @@ export function buildDashboard(discovery) {
               missingTelemetryCard(e),
               {
                 type: "distribution",
-                title: "Current power balance",
+                title: "Current power readings",
                 entities: [
                   { entity: e.pvPower, name: "Solar production", color: "#f9a825" },
                   { entity: e.loadPower, name: "Home load", color: "#1e88e5" },
@@ -123,7 +123,7 @@ export function buildDashboard(discovery) {
                   { entity: e.gridExportPower, name: "Grid export", color: "#8e24aa" },
                   { entity: e.batteryPower, name: "Battery (+ charge / − discharge)", color: "#00897b" },
                 ],
-                grid_options: { columns: "full", rows: 5 },
+                grid_options: { columns: "full" },
               },
               heading("Primary power", "mdi:flash", "subtitle"),
               tile(e.pvPower, "Solar production", "mdi:solar-power"),
@@ -194,7 +194,7 @@ export function buildDashboard(discovery) {
             type: "grid",
             cards: [
               heading("Production and use", "mdi:chart-areaspline"),
-              { type: "energy-usage-graph", title: "Home energy", collection_key: ENERGY_COLLECTION, show_legend: true, grid_options: { columns: "full", rows: 6 } },
+              { type: "energy-usage-graph", title: "Home energy", collection_key: ENERGY_COLLECTION, show_legend: false, grid_options: { columns: "full", rows: 6 } },
               { type: "energy-solar-graph", title: "Solar production", collection_key: ENERGY_COLLECTION, grid_options: { columns: "full", rows: 6 } },
               {
                 type: "history-graph",
@@ -221,8 +221,21 @@ export function buildDashboard(discovery) {
           {
             type: "grid",
             cards: [
-              heading("Source totals", "mdi:table-large"),
-              { type: "energy-sources-table", title: "Grid, solar, and battery", collection_key: ENERGY_COLLECTION, types: ["grid", "solar", "battery"], grid_options: { columns: "full", rows: 7 } },
+              heading("Lifetime totals", "mdi:counter"),
+              {
+                type: "entities",
+                title: "Lifetime energy",
+                show_header_toggle: false,
+                entities: [
+                  entityRow(e.yieldLifetime, "Solar generated", "mdi:solar-power"),
+                  entityRow(e.consumptionLifetime, "Home consumed", "mdi:home-lightning-bolt"),
+                  entityRow(e.gridImportLifetime, "Grid imported", "mdi:transmission-tower-import"),
+                  entityRow(e.gridExportLifetime, "Grid exported", "mdi:transmission-tower-export"),
+                  entityRow(e.chargingLifetime, "Battery charged", "mdi:battery-arrow-up"),
+                  entityRow(e.dischargingLifetime, "Battery discharged", "mdi:battery-arrow-down"),
+                ],
+                grid_options: { columns: "full" },
+              },
             ],
           },
         ],
@@ -282,7 +295,7 @@ export function buildDashboard(discovery) {
                   { entity: e.pv2Power, name: "PV 2", color: "#fbc02d" },
                   { entity: e.pv3Power, name: "PV 3", color: "#fdd835" },
                 ],
-                grid_options: { columns: "full", rows: 4 },
+                grid_options: { columns: "full" },
               },
               {
                 type: "entities",
