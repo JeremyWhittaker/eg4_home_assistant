@@ -49,6 +49,7 @@ One or more live readings are unavailable. Values below are left unavailable—n
 {% set imported = import_raw | float %}
 {% set exported = export_raw | float %}
 {% set battery = battery_raw | float %}
+{% set soc = soc_raw | float %}
 {% if is_state('${e.offGrid}', 'on') %}
 ## 🏝️ Operating off-grid
 {% else %}
@@ -56,7 +57,7 @@ One or more live readings are unavailable. Values below are left unavailable—n
 {% endif %}
 Producing **{{ (pv / 1000) | round(1) }} kW** for a **{{ (load / 1000) | round(1) }} kW** home load.
 {% if exported > 50 %}Exporting **{{ (exported / 1000) | round(1) }} kW** to the grid.{% elif imported > 50 %}Importing **{{ (imported / 1000) | round(1) }} kW** from the grid.{% else %}Grid exchange is effectively neutral.{% endif %}
-Battery is **{{ soc_raw | round(0) }}%** and {% if battery > 50 %}charging at **{{ (battery / 1000) | round(1) }} kW**{% elif battery < -50 %}discharging at **{{ ((battery | abs) / 1000) | round(1) }} kW**{% else %}standing by{% endif %}. · **Mode:** {{ states('${e.operatingState}') }}
+Battery is **{{ soc | round(0) }}%** and {% if battery > 50 %}charging at **{{ (battery / 1000) | round(1) }} kW**{% elif battery < -50 %}discharging at **{{ ((battery | abs) / 1000) | round(1) }} kW**{% else %}standing by{% endif %}. · **Mode:** {{ states('${e.operatingState}') }}
 {% endif %}`;
 }
 
@@ -113,13 +114,16 @@ export function buildDashboard(discovery) {
               },
               missingTelemetryCard(e),
               {
-                type: "power-sankey",
-                title: "Right now",
-                collection_key: ENERGY_COLLECTION,
-                layout: "auto",
-                group_by_area: false,
-                group_by_floor: false,
-                grid_options: { columns: "full", rows: 6 },
+                type: "distribution",
+                title: "Current power balance",
+                entities: [
+                  { entity: e.pvPower, name: "Solar production", color: "#f9a825" },
+                  { entity: e.loadPower, name: "Home load", color: "#1e88e5" },
+                  { entity: e.gridImportPower, name: "Grid import", color: "#7e57c2" },
+                  { entity: e.gridExportPower, name: "Grid export", color: "#8e24aa" },
+                  { entity: e.batteryPower, name: "Battery (+ charge / − discharge)", color: "#00897b" },
+                ],
+                grid_options: { columns: "full", rows: 5 },
               },
               heading("Primary power", "mdi:flash", "subtitle"),
               tile(e.pvPower, "Solar production", "mdi:solar-power"),
@@ -192,7 +196,19 @@ export function buildDashboard(discovery) {
               heading("Production and use", "mdi:chart-areaspline"),
               { type: "energy-usage-graph", title: "Home energy", collection_key: ENERGY_COLLECTION, show_legend: true, grid_options: { columns: "full", rows: 6 } },
               { type: "energy-solar-graph", title: "Solar production", collection_key: ENERGY_COLLECTION, grid_options: { columns: "full", rows: 6 } },
-              { type: "power-sources-graph", title: "Power sources", collection_key: ENERGY_COLLECTION, show_legend: true, grid_options: { columns: "full", rows: 6 } },
+              {
+                type: "history-graph",
+                title: "Today's power detail",
+                hours_to_show: 24,
+                entities: [
+                  entityRow(e.pvPower, "Solar"),
+                  entityRow(e.loadPower, "Home load"),
+                  entityRow(e.gridImportPower, "Grid import"),
+                  entityRow(e.gridExportPower, "Grid export"),
+                  entityRow(e.batteryPower, "Battery (+ charge / − discharge)"),
+                ],
+                grid_options: { columns: "full", rows: 6 },
+              },
             ],
           },
           {
@@ -460,4 +476,3 @@ export const dashboardMetadata = Object.freeze({
   showInSidebar: true,
   requireAdmin: false,
 });
-

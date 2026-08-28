@@ -10,6 +10,7 @@ import {
   planDashboard,
   restoreBackup,
   validateDashboard,
+  validateDashboardTemplates,
   verifyDashboard,
   verifyEnergyPreferences,
 } from "./src/deployer.mjs";
@@ -71,6 +72,7 @@ async function main() {
     });
     const candidate = buildDashboard(discovery);
     const validation = validateDashboard(candidate, states);
+    const templates = await validateDashboardTemplates(client, candidate);
     const energy = verifyEnergyPreferences(energyPreferences, discovery.entities);
     const existing = dashboards.find((dashboard) => dashboard.url_path === dashboardMetadata.urlPath) ?? null;
     const existingConfig = existing?.mode === "storage"
@@ -84,6 +86,7 @@ async function main() {
       `entities=${validation.references.length}`,
       `cards=${validation.cardCount}`,
       `views=${validation.viewCount}`,
+      `templates=${templates.templateCount}`,
       `energy=${energy.sourceTypes.join("+")}`,
       `dashboard=${dashboardMetadata.urlPath}`,
       `action=${plan.action}`,

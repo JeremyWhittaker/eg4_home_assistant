@@ -6,7 +6,7 @@ The installer discovers entities by their Home Assistant device relationship and
 
 ## What it provides
 
-- **Live** — real-time Sankey power flow, solar/home/grid/battery KPIs, battery SOC, today's energy, and a 24-hour power chart.
+- **Live** — real-time power balance, solar/home/grid/battery KPIs, battery SOC, today's energy, and a 24-hour power chart.
 - **Energy** — native Energy date selection, energy distribution, grid balance, self-sufficiency, solar use, usage/solar graphs, Sankey flow, and source totals.
 - **Performance** — 48-hour power, 30-day energy, PV string contribution, battery trends, temperatures, voltage, and frequency.
 - **System** — connection/runtime health, inverter status, BMS detail, electrical telemetry, firmware, and daily counters.
@@ -29,7 +29,7 @@ The dashboard resolves 60 live entities into 79 native cards across four respons
 ## Requirements
 
 - Node.js 22 or newer.
-- Home Assistant 2026.8 or newer for the current native Sankey, power-source, and distribution cards.
+- Home Assistant 2026.8 or newer for the current native Energy Sankey and distribution cards.
 - An administrator long-lived token supplied through `HA_TOKEN` or `EG4_HA_TOKEN`.
 - `HA_BASE_URL` set to the reachable Home Assistant origin.
 - EG4 Web Monitor entities and grid/solar/battery Energy sources already configured.
@@ -50,7 +50,7 @@ Run all static and unit checks:
 npm run check
 ```
 
-Run live preflight. This performs discovery, administrator verification, candidate validation, Energy-source validation, collision checks, and a create/update/unchanged plan without writing Home Assistant:
+Run live preflight. This performs discovery, administrator verification, candidate validation, read-only Home Assistant template rendering, Energy-source validation, collision checks, and a create/update/unchanged plan without writing Home Assistant:
 
 ```bash
 node deploy.mjs --check
@@ -95,7 +95,7 @@ node deploy.mjs --restore /tmp/eg4-ha-dashboard-*/backup.json --force-restore
 
 ## Visual QA
 
-After deployment, the headless QA runner authenticates with the same long-lived token, takes desktop and mobile screenshots of Live and Energy, rejects Lovelace error cards, and writes a JSON report. Its temporary Chromium profile contains the token only in ephemeral local storage and is removed on exit.
+After deployment, the headless QA runner authenticates with the same long-lived token and visits all four views at desktop and mobile sizes. It captures overlapping screenshots from top through bottom, repeats Live and Energy in light and dark modes, verifies the sidebar route, and fails on Lovelace or browser errors. Its temporary Chromium profile contains the token only in ephemeral local storage and is removed on exit.
 
 ```bash
 npm run qa:visual -- --output-dir /tmp/eg4-home-assistant-qa
@@ -114,4 +114,3 @@ The runner defaults to `/usr/bin/chromium-browser`; override with `CHROMIUM_BIN`
 - Backup restore includes checksum and drift guards.
 
 See [QA_CHECKLIST.md](QA_CHECKLIST.md) for release evidence and [docs/analysis.md](docs/analysis.md) for the live data-model analysis and design rationale.
-

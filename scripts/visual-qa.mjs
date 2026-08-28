@@ -134,12 +134,16 @@ async function waitForLoad(session, action) {
 const INSPECTION_EXPRESSION = `(() => {
   const tags = [];
   const text = [];
+  const paths = [];
   const visit = (root) => {
     for (const element of root.querySelectorAll('*')) {
       tags.push(element.localName);
-      if (['hui-error-card', 'ha-alert', 'mwc-button', 'ha-button'].includes(element.localName)) {
+      if (['hui-error-card', 'hui-warning', 'ha-alert'].includes(element.localName)) {
         const value = (element.innerText || element.textContent || '').trim();
         if (value) text.push(value.slice(0, 500));
+      }
+      if (element.localName === 'a' && element.href) {
+        try { paths.push(new URL(element.href, location.href).pathname); } catch {}
       }
       if (element.shadowRoot) visit(element.shadowRoot);
     }
@@ -152,6 +156,7 @@ const INSPECTION_EXPRESSION = `(() => {
     hasHomeAssistant: tags.includes('home-assistant'),
     hasLovelace: tags.includes('ha-panel-lovelace') && (tags.includes('hui-root') || tags.includes('hui-view')),
     loginVisible: tags.includes('ha-authorize') || tags.includes('ha-auth-form'),
+    hasDashboardNav: paths.some((path) => path === '/${dashboardMetadata.urlPath}' || path.startsWith('/${dashboardMetadata.urlPath}/')),
     errorTags,
     alertText: [...new Set(text)],
     renderedCards: tags.filter((tag) => tag.startsWith('hui-') || tag.startsWith('ha-energy-')).length,
@@ -179,18 +184,74 @@ async function waitForDashboard(session, expectedPath) {
   await pause(4_000);
   inspection = await evaluate(session, INSPECTION_EXPRESSION);
   if (inspection.errorTags.length) throw new Error(`Home Assistant rendered ${inspection.errorTags.length} dashboard error card(s)`);
+  if (inspection.renderedCards < 3) throw new Error(`Home Assistant rendered too few dashboard elements at ${expectedPath}`);
   return inspection;
 }
 
-async function screenshot(session, { baseUrl, view, viewport, outputDir }) {
+async function scrollDashboard(session, offset) {
+  if (!Number.isFinite(offset) || offset < 0) throw new Error("Scroll offset must be a non-negative number");
+  return evaluate(session, `(() => {
+    const candidates = [];
+    const visit = (root) => {
+      for (const element of root.querySelectorAll('*')) {
+        const rect = element.getBoundingClientRect();
+        const overflow = element.scrollHeight - element.clientHeight;
+        if (overflow > 100 && rect.width > 200 && rect.height > 200) {
+          candidates.push({ element, score: overflow * rect.width });
+        }
+        if (element.shadowRoot) visit(element.shadowRoot);
+      }
+    };
+    visit(document);
+    candidates.sort((left, right) => right.score - left.score);
+    const target = candidates[0]?.element;
+    if (!target) {
+      window.scrollTo(0, ${Math.floor(offset)});
+      return { target: 'window', top: window.scrollY, height: document.documentElement.scrollHeight, viewport: window.innerHeight };
+    }
+    target.scrollTop = ${Math.floor(offset)};
+    return { target: target.localName, top: target.scrollTop, height: target.scrollHeight, viewport: target.clientHeight };
+  })()`);
+}
+
+async function capturePng(session, path) {
+  const capture = await session.call("Page.captureScreenshot", { format: "png", fromSurface: true, captureBeyondViewport: false });
+  writeFileSync(path, Buffer.from(capture.data, "base64"));
+}
+
+async function screenshot(session, { baseUrl, view, viewport, outputDir, theme }) {
   await session.call("Emulation.setDeviceMetricsOverride", viewport);
+  await session.call("Emulation.setEmulatedMedia", {
+    media: "screen",
+    features: [{ name: "prefers-color-scheme", value: theme }],
+  });
   const expectedPath = `/${dashboardMetadata.urlPath}/${view}`;
   await waitForLoad(session, () => session.call("Page.navigate", { url: `${baseUrl}${expectedPath}` }));
-  const inspection = await waitForDashboard(session, expectedPath);
-  const capture = await session.call("Page.captureScreenshot", { format: "png", fromSurface: true, captureBeyondViewport: false });
-  const filename = `${viewport.mobile ? "mobile" : "desktop"}-${view}.png`;
-  writeFileSync(join(outputDir, filename), Buffer.from(capture.data, "base64"));
-  return { filename, viewport: { width: viewport.width, height: viewport.height, mobile: viewport.mobile }, inspection };
+  await waitForDashboard(session, expectedPath);
+  const prefix = `${viewport.mobile ? "mobile" : "desktop"}-${view}-${theme}`;
+  const segments = [];
+  let requestedOffset = 0;
+  for (let index = 0; index < 40; index += 1) {
+    const scroll = await scrollDashboard(session, requestedOffset);
+    await pause(350);
+    const inspection = await evaluate(session, INSPECTION_EXPRESSION);
+    if (inspection.errorTags.length) throw new Error(`Home Assistant rendered an error while scrolling ${expectedPath}`);
+    const filename = `${prefix}-${String(index + 1).padStart(2, "0")}.png`;
+    await capturePng(session, join(outputDir, filename));
+    segments.push({ filename, scroll, inspection });
+
+    const maxOffset = Math.max(0, scroll.height - scroll.viewport);
+    if (scroll.top >= maxOffset - 2) break;
+    const nextOffset = Math.min(maxOffset, scroll.top + Math.max(200, Math.floor(scroll.viewport * 0.8)));
+    if (nextOffset <= scroll.top) throw new Error(`Could not advance the Home Assistant scroll container at ${expectedPath}`);
+    requestedOffset = nextOffset;
+    if (index === 39) throw new Error(`Dashboard at ${expectedPath} exceeded the 40-segment visual QA safety cap`);
+  }
+  return {
+    theme,
+    viewport: { width: viewport.width, height: viewport.height, mobile: viewport.mobile },
+    segments,
+  };
 }
 
 async function stopBrowser(browser) {
@@ -246,6 +307,10 @@ async function main() {
     session.on("Log.entryAdded", ({ entry }) => {
       if (entry?.level === "error") consoleErrors.push(String(entry.text).slice(0, 500));
     });
+    session.on("Runtime.exceptionThrown", ({ exceptionDetails }) => {
+      const text = exceptionDetails?.exception?.description ?? exceptionDetails?.text;
+      if (text) consoleErrors.push(String(text).slice(0, 500));
+    });
 
     await waitForDashboardOrigin(session, baseUrl);
     const authData = {
@@ -257,31 +322,39 @@ async function main() {
       expires_in: 1e11,
     };
     await evaluate(session, `localStorage.setItem('hassTokens', ${JSON.stringify(JSON.stringify(authData))}); true`);
+    consoleErrors.length = 0;
 
     const captures = [];
-    for (const view of ["live", "energy"]) {
-      captures.push(await screenshot(session, {
-        baseUrl,
-        view,
-        outputDir,
-        viewport: { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false },
-      }));
-      captures.push(await screenshot(session, {
-        baseUrl,
-        view,
-        outputDir,
-        viewport: { width: 390, height: 844, deviceScaleFactor: 2, mobile: true },
-      }));
+    const desktop = { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false };
+    const mobile = { width: 390, height: 844, deviceScaleFactor: 2, mobile: true };
+    const cases = [
+      ...["live", "energy", "performance", "system"].flatMap((view) => [
+        { view, viewport: desktop, theme: "light" },
+        { view, viewport: mobile, theme: "light" },
+      ]),
+      ...["live", "energy"].flatMap((view) => [
+        { view, viewport: desktop, theme: "dark" },
+        { view, viewport: mobile, theme: "dark" },
+      ]),
+    ];
+    for (const captureCase of cases) {
+      captures.push(await screenshot(session, { baseUrl, outputDir, ...captureCase }));
     }
+    const uniqueConsoleErrors = [...new Set(consoleErrors)];
     const report = {
       checked_at: new Date().toISOString(),
       dashboard_path: dashboardMetadata.urlPath,
       captures,
-      console_errors: consoleErrors,
+      console_errors: uniqueConsoleErrors,
     };
     const reportPath = join(outputDir, "report.json");
     writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
-    console.log(`visual-qa-ok captures=${captures.length} report=${reportPath} console_errors=${consoleErrors.length}`);
+    if (uniqueConsoleErrors.length) throw new Error(`Browser logged ${uniqueConsoleErrors.length} error(s); inspect ${reportPath}`);
+    if (!captures.some((capture) => capture.segments.some((segment) => segment.inspection.hasDashboardNav))) {
+      throw new Error(`Sidebar link for ${dashboardMetadata.urlPath} was not found; inspect ${reportPath}`);
+    }
+    const screenshotCount = captures.reduce((total, capture) => total + capture.segments.length, 0);
+    console.log(`visual-qa-ok routes=4 captures=${captures.length} screenshots=${screenshotCount} themes=light+dark report=${reportPath} console_errors=0`);
   } finally {
     session?.close();
     await stopBrowser(browser);

@@ -18,7 +18,7 @@ export class HomeAssistantClient {
     this.version = null;
   }
 
-  async request(path, { method = "GET", body, allowNotFound = false } = {}) {
+  async request(path, { method = "GET", body, allowNotFound = false, responseType = "json" } = {}) {
     const attempts = method === "GET" ? this.readRetries + 1 : 1;
     let lastError;
     for (let attempt = 0; attempt < attempts; attempt += 1) {
@@ -43,6 +43,8 @@ export class HomeAssistantClient {
           throw new Error(`${method} ${path} failed with ${response.status}: ${detail}`);
         }
         const text = await response.text();
+        if (responseType === "text") return text;
+        if (responseType !== "json") throw new Error(`Unsupported response type: ${responseType}`);
         return text ? JSON.parse(text) : null;
       } catch (error) {
         lastError = error;
@@ -117,4 +119,3 @@ export class HomeAssistantClient {
     this.socket?.close();
   }
 }
-

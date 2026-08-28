@@ -9,11 +9,13 @@ import {
   applyDashboard,
   createBackup,
   collectEntityReferences,
+  collectDashboardTemplates,
   loadBackup,
   planDashboard,
   restoreBackup,
   stableString,
   validateDashboard,
+  validateDashboardTemplates,
   verifyEnergyPreferences,
 } from "../src/deployer.mjs";
 
@@ -69,7 +71,8 @@ test("dashboard is native-only, monitoring-only, responsive, and references live
   const result = validateDashboard(dashboard, data.states);
   assert.deepEqual(dashboard.views.map((view) => view.path), ["live", "energy", "performance", "system"]);
   assert.ok(dashboard.views.every((view) => view.type === "sections"));
-  assert.ok(stableString(dashboard).includes('"type":"power-sankey"'));
+  assert.ok(!stableString(dashboard).includes('"type":"power-sankey"'));
+  assert.ok(!stableString(dashboard).includes('"type":"power-sources-graph"'));
   assert.ok(stableString(dashboard).includes('"type":"energy-sankey"'));
   assert.ok(stableString(dashboard).includes('"type":"distribution"'));
   assert.ok(!stableString(dashboard).includes("custom:"));
@@ -84,6 +87,31 @@ test("dashboard validation rejects missing entities and mutating actions", () =>
   assert.throws(() => validateDashboard(dashboard, data.states.slice(1)), /missing live entities/);
   dashboard.views[0].sections[0].cards.push({ type: "tile", entity: data.states[0].entity_id, tap_action: { action: "toggle" } });
   assert.throws(() => validateDashboard(dashboard, data.states), /mutating action/);
+
+  const controlDashboard = buildDashboard(discoverEg4(data));
+  controlDashboard.views[0].sections[0].cards.push({ type: "tile", entity: "switch.fixture_control" });
+  assert.throws(
+    () => validateDashboard(controlDashboard, [...data.states, { entity_id: "switch.fixture_control", state: "off", attributes: {} }]),
+    /control entities/,
+  );
+});
+
+test("dashboard templates are discovered and rendered through Home Assistant", async () => {
+  const dashboard = buildDashboard(discoverEg4(fixture()));
+  const templates = collectDashboardTemplates(dashboard);
+  assert.equal(templates.length, 1);
+  assert.ok(templates[0].includes("soc_raw | float"));
+  const calls = [];
+  const client = {
+    async request(path, options) {
+      calls.push({ path, options });
+      return "rendered";
+    },
+  };
+  assert.deepEqual(await validateDashboardTemplates(client, dashboard), { templateCount: 1 });
+  assert.equal(calls[0].path, "/api/template");
+  assert.equal(calls[0].options.method, "POST");
+  assert.equal(calls[0].options.responseType, "text");
 });
 
 test("Energy preferences must use the selected EG4 lifetime counters", () => {

@@ -6,11 +6,11 @@ import { join } from "node:path";
 const ALLOWED_TYPES = new Set([
   "sections", "grid", "heading", "markdown", "tile", "gauge", "history-graph",
   "statistics-graph", "distribution", "entities", "entity-filter", "entity",
-  "power-sankey", "power-sources-graph", "energy-date-selection", "energy-distribution",
+  "energy-date-selection", "energy-distribution",
   "energy-grid-balance", "energy-self-sufficiency-gauge", "energy-solar-consumed-gauge",
   "energy-usage-graph", "energy-solar-graph", "energy-sources-table", "energy-sankey",
 ]);
-const ENTITY_REFERENCE_PATTERN = /\b(?:binary_sensor|sensor)\.[a-z0-9_]+\b/g;
+const ENTITY_REFERENCE_PATTERN = /\b[a-z_][a-z0-9_]*\.[a-z0-9_]+\b/g;
 const CONTROL_DOMAINS = new Set(["automation", "button", "input_boolean", "input_button", "input_datetime", "input_number", "input_select", "input_text", "number", "script", "select", "switch", "time"]);
 const WRITE_ACTIONS = new Set(["call-service", "perform-action", "toggle"]);
 const METADATA_FIELDS = ["title", "icon", "show_in_sidebar", "require_admin"];
@@ -40,6 +40,29 @@ export function collectEntityReferences(value, references = new Set()) {
     for (const child of Object.values(value)) collectEntityReferences(child, references);
   }
   return references;
+}
+
+export function collectDashboardTemplates(value, templates = []) {
+  if (typeof value === "string") {
+    if (value.includes("{{") || value.includes("{%")) templates.push(value);
+  } else if (Array.isArray(value)) {
+    for (const child of value) collectDashboardTemplates(child, templates);
+  } else if (value && typeof value === "object") {
+    for (const child of Object.values(value)) collectDashboardTemplates(child, templates);
+  }
+  return templates;
+}
+
+export async function validateDashboardTemplates(client, config) {
+  const templates = collectDashboardTemplates(config);
+  for (const template of templates) {
+    await client.request("/api/template", {
+      method: "POST",
+      body: { template },
+      responseType: "text",
+    });
+  }
+  return { templateCount: templates.length };
 }
 
 export function validateDashboard(config, liveStates) {

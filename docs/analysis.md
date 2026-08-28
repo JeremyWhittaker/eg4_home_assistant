@@ -53,9 +53,11 @@ Home Assistant Energy preferences already bind the same selected inverter to:
 - solar yield lifetime energy;
 - battery discharge/charge lifetime energy.
 
-That makes the 2026.8 native `power-sankey`, `power-sources-graph`, `energy-sankey`, distribution, balance, and self-sufficiency cards the best fit. They are responsive, theme-aware, and avoid adding HACS dependencies.
+The configured sources do not define `stat_rate` power entities. Home Assistant's native `power-sankey` and `power-sources-graph` require those optional rate inputs, so this project deliberately omits both rather than installing cards with empty live flow. It also does not alter the user's existing Energy preferences.
 
-The deployer requires this binding during preflight rather than silently showing empty Energy cards.
+The Live view uses direct EG4 power entities in the native distribution, tiles, narrative, and history cards. The Energy view uses the lifetime-backed `energy-sankey`, distribution, balance, self-sufficiency, usage, solar, and source-total cards. This keeps every visualization populated while remaining responsive, theme-aware, and free of HACS dependencies.
+
+The deployer requires the lifetime binding during preflight rather than silently showing empty historical Energy cards. It also asks Home Assistant to render the dashboard's Jinja template before any dashboard write, catching server-side template errors against live entities.
 
 ## Information architecture
 
@@ -69,4 +71,3 @@ The panel separates questions by time horizon:
 Primary values are solar production, home load, grid direction, battery power/SOC, operating state, and telemetry health. Detailed electrical/BMS values are kept out of the first view to preserve an at-a-glance hierarchy.
 
 Solar uses amber, home load uses the active Home Assistant theme, battery uses its semantic battery icons, and grid direction is always labeled as import/export. Status never relies on color alone.
-

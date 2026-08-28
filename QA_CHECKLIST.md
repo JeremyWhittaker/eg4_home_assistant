@@ -10,6 +10,9 @@ Status values: `implemented`, `blocked`, `deferred`, or `not applicable`.
 | Candidate references only live entities | implemented | Semantic discovery plus `validateDashboard`; unit and live preflight evidence |
 | Monitoring-only scope | implemented | Only `sensor`/`binary_sensor`; validation forbids control domains and mutating actions |
 | Built-in card dependency gate | implemented | Card allowlist rejects `custom:*`; live resource audit found no relevant custom card |
+| Server-side Jinja template render | implemented | Live `--check` renders the summary through `/api/template`; healthy SOC path is covered |
+| Native live-power prerequisites | implemented | Energy prefs have no `stat_rate`; incompatible `power-sankey`/`power-sources-graph` cards are intentionally omitted in favor of direct EG4 cards |
+| Independent acceptance review | implemented | Reviewer found three issues; all remediated; final scored result is `approve` with zero findings |
 | Desktop rendering | deferred | Run `npm run qa:visual` after live deployment |
 | Mobile rendering | deferred | Run `npm run qa:visual` after live deployment |
 | Sidebar navigation and all four view routes | deferred | Verify after live deployment |
@@ -18,11 +21,10 @@ Status values: `implemented`, `blocked`, `deferred`, or `not applicable`.
 | Forms, CTAs, and inverter controls | not applicable | Display-only panel intentionally contains none |
 | Internal labels such as rebuild/prototype/staging | implemented | Operator copy audit before deployment; none are present |
 | Light/dark theme behavior | deferred | Inspect rendered cards in visual QA; native theme tokens only |
-| Desktop/mobile Lovelace error-card scan | deferred | Automated by `scripts/visual-qa.mjs` after deployment |
+| Full-scroll desktop/mobile Lovelace error-card scan | deferred | All four routes and every overlapping viewport segment are automated by `scripts/visual-qa.mjs` after deployment |
 | Home Assistant error log after save | deferred | Inspect after deployment |
 | Dashboard round-trip equality | implemented | `verifyDashboard` re-reads metadata and config after every live save |
 | Automatic rollback and explicit restore | implemented | Transaction unit tests plus checksum/drift-guarded `--restore` |
 | Token absent from logs/backups/repo | implemented | Environment-only auth; backup schema omits token; secret scan required at closeout |
 | `noindex`, canonical, and robots | not applicable | Private Home Assistant authenticated panel, not a public website |
-| Commit and push | deferred | First green commit: `385bbc5`; no Git remote configured |
-
+| Commit and push | deferred | Green commits `385bbc5` and `c6a3de5`; no Git remote configured |
