@@ -1,6 +1,8 @@
-# EG4 Solar & Storage dashboard
+# EG4 Solar & Battery dashboard
 
-A professional, native Home Assistant dashboard for an EG4 18KPV inverter and its battery bank. It is read-only, responsive, dependency-free, and installs as a dedicated **Solar & Storage** sidebar panel.
+A professional, native Home Assistant equipment dashboard for an EG4 18KPV inverter and its battery bank. It is read-only, responsive, dependency-free, and installs as a dedicated **EG4 Solar & Battery** sidebar panel.
+
+This page intentionally reports the EG4 inverter's own measurements. In Jeremy's dual-array property, EG4 **Consumption Power** is an AC-bus-derived value and does not include the separate Enphase array correctly as whole-property load. Use the dedicated **Home Energy** dashboard for the Enphase-corrected whole-home balance; use this page for EG4 inverter, strings, grid CT, battery, BMS, and equipment diagnostics.
 
 The installer discovers entities by their Home Assistant device relationship and semantic original names. Inverter serial numbers, station addresses, access tokens, and live state dumps never enter this repository.
 

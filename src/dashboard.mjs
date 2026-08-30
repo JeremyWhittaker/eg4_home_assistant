@@ -55,7 +55,7 @@ One or more live readings are unavailable. Values below are left unavailable—n
 {% else %}
 ## ☀️ Solar system online
 {% endif %}
-Producing **{{ (pv / 1000) | round(1) }} kW** for a **{{ (load / 1000) | round(1) }} kW** home load.
+Producing **{{ (pv / 1000) | round(1) }} kW** with **{{ (load / 1000) | round(1) }} kW** on EG4's metered AC balance. This is an equipment reading, not the whole-property load; use **Home Energy** for the Enphase-corrected total.
 {% if exported > 50 %}Exporting **{{ (exported / 1000) | round(1) }} kW** to the grid.{% elif imported > 50 %}Importing **{{ (imported / 1000) | round(1) }} kW** from the grid.{% else %}Grid exchange is effectively neutral.{% endif %}
 Battery is **{{ soc | round(0) }}%** and {% if battery > 50 %}charging at **{{ (battery / 1000) | round(1) }} kW**{% elif battery < -50 %}discharging at **{{ ((battery | abs) / 1000) | round(1) }} kW**{% else %}standing by{% endif %}. · **Mode:** {{ state_translated('${e.operatingState}') }}
 {% endif %}`;
@@ -68,7 +68,7 @@ function missingTelemetryCard(e) {
     show_empty: false,
     entities: [
       entityRow(e.pvPower, "Solar production"),
-      entityRow(e.loadPower, "Home load"),
+      entityRow(e.loadPower, "EG4 metered load"),
       entityRow(e.gridImportPower, "Grid import"),
       entityRow(e.gridExportPower, "Grid export"),
       entityRow(e.batteryPower, "Battery power"),
@@ -118,7 +118,7 @@ export function buildDashboard(discovery) {
                 title: "Current power readings",
                 entities: [
                   { entity: e.pvPower, name: "Solar production", color: "#f9a825" },
-                  { entity: e.loadPower, name: "Home load", color: "#1e88e5" },
+                  { entity: e.loadPower, name: "EG4 metered load", color: "#1e88e5" },
                   { entity: e.gridImportPower, name: "Grid import", color: "#7e57c2" },
                   { entity: e.gridExportPower, name: "Grid export", color: "#8e24aa" },
                   { entity: e.batteryPower, name: "Battery (+ charge / − discharge)", color: "#00897b" },
@@ -127,7 +127,7 @@ export function buildDashboard(discovery) {
               },
               heading("Primary power", "mdi:flash", "subtitle"),
               tile(e.pvPower, "Solar production", "mdi:solar-power"),
-              tile(e.loadPower, "Home load", "mdi:home-lightning-bolt"),
+              tile(e.loadPower, "EG4 metered load", "mdi:meter-electric-outline"),
               tile(e.gridImportPower, "Grid import", "mdi:transmission-tower-import"),
               tile(e.gridExportPower, "Grid export", "mdi:transmission-tower-export"),
             ],
@@ -150,7 +150,7 @@ export function buildDashboard(discovery) {
               tile(e.batteryBankStatus, "Battery status", "mdi:battery-heart", 6),
               heading("Today", "mdi:calendar-today", "subtitle"),
               tile(e.yieldToday, "Solar generated", "mdi:white-balance-sunny", 6),
-              tile(e.consumptionToday, "Home consumed", "mdi:home-lightning-bolt-outline", 6),
+              tile(e.consumptionToday, "EG4 metered consumption", "mdi:meter-electric-outline", 6),
               tile(e.gridImportToday, "Imported", "mdi:transmission-tower-import", 6),
               tile(e.gridExportToday, "Exported", "mdi:transmission-tower-export", 6),
               heading("Last 24 hours", "mdi:chart-areaspline", "subtitle"),
@@ -160,7 +160,7 @@ export function buildDashboard(discovery) {
                 hours_to_show: 24,
                 entities: [
                   entityRow(e.pvPower, "Solar"),
-                  entityRow(e.loadPower, "Home load"),
+                  entityRow(e.loadPower, "EG4 metered load"),
                   entityRow(e.gridImportPower, "Grid import"),
                   entityRow(e.gridExportPower, "Grid export"),
                   entityRow(e.batteryPower, "Battery (+ charge / − discharge)"),
@@ -202,7 +202,7 @@ export function buildDashboard(discovery) {
                 hours_to_show: 24,
                 entities: [
                   entityRow(e.pvPower, "Solar"),
-                  entityRow(e.loadPower, "Home load"),
+                  entityRow(e.loadPower, "EG4 metered load"),
                   entityRow(e.gridImportPower, "Grid import"),
                   entityRow(e.gridExportPower, "Grid export"),
                   entityRow(e.batteryPower, "Battery (+ charge / − discharge)"),
@@ -228,7 +228,7 @@ export function buildDashboard(discovery) {
                 show_header_toggle: false,
                 entities: [
                   entityRow(e.yieldLifetime, "Solar generated", "mdi:solar-power"),
-                  entityRow(e.consumptionLifetime, "Home consumed", "mdi:home-lightning-bolt"),
+                  entityRow(e.consumptionLifetime, "EG4 metered consumption", "mdi:meter-electric-outline"),
                   entityRow(e.gridImportLifetime, "Grid imported", "mdi:transmission-tower-import"),
                   entityRow(e.gridExportLifetime, "Grid exported", "mdi:transmission-tower-export"),
                   entityRow(e.chargingLifetime, "Battery charged", "mdi:battery-arrow-up"),
@@ -258,7 +258,7 @@ export function buildDashboard(discovery) {
                 hours_to_show: 48,
                 entities: [
                   entityRow(e.pvPower, "Solar"),
-                  entityRow(e.loadPower, "Home load"),
+                  entityRow(e.loadPower, "EG4 metered load"),
                   entityRow(e.gridImportPower, "Grid import"),
                   entityRow(e.gridExportPower, "Grid export"),
                   entityRow(e.batteryPower, "Battery"),
@@ -270,7 +270,7 @@ export function buildDashboard(discovery) {
                 title: "Daily energy · 30 days",
                 entities: [
                   entityRow(e.yieldLifetime, "Solar generated"),
-                  entityRow(e.consumptionLifetime, "Home consumed"),
+                  entityRow(e.consumptionLifetime, "EG4 metered consumption"),
                   entityRow(e.gridImportLifetime, "Grid import"),
                   entityRow(e.gridExportLifetime, "Grid export"),
                 ],
@@ -466,7 +466,7 @@ export function buildDashboard(discovery) {
                 show_header_toggle: false,
                 entities: [
                   entityRow(e.yieldToday, "Solar generated"),
-                  entityRow(e.consumptionToday, "Home consumed"),
+                  entityRow(e.consumptionToday, "EG4 metered consumption"),
                   entityRow(e.gridImportToday, "Grid imported"),
                   entityRow(e.gridExportToday, "Grid exported"),
                   entityRow(e.chargingToday, "Battery charged"),
@@ -484,7 +484,7 @@ export function buildDashboard(discovery) {
 
 export const dashboardMetadata = Object.freeze({
   urlPath: "eg4-energy",
-  title: "Solar & Storage",
+  title: "EG4 Solar & Battery",
   icon: "mdi:solar-power",
   showInSidebar: true,
   requireAdmin: false,
