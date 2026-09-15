@@ -13,6 +13,10 @@ const ALLOWED_TYPES = new Set([
 const ENTITY_REFERENCE_PATTERN = /\b[a-z_][a-z0-9_]*\.[a-z0-9_]+\b/g;
 const CONTROL_DOMAINS = new Set(["automation", "button", "input_boolean", "input_button", "input_datetime", "input_number", "input_select", "input_text", "number", "script", "select", "switch", "time"]);
 const WRITE_ACTIONS = new Set(["call-service", "perform-action", "toggle"]);
+// The only two card actions that cannot change anything: more-info opens the entity's
+// details dialog, none does nothing at all.
+const READ_ACTIONS = new Set(["more-info", "none"]);
+const PINNED_TILE_ACTIONS = ["tap_action", "icon_tap_action", "hold_action"];
 const METADATA_FIELDS = ["title", "icon", "show_in_sidebar", "require_admin"];
 
 export function stableValue(value) {
@@ -65,6 +69,65 @@ export async function validateDashboardTemplates(client, config) {
   return { templateCount: templates.length };
 }
 
+// A control-domain entity — a number, select, switch, or button — may appear on this
+// page in exactly one shape: as the `entity` of an inert tile. A tile is inert when
+//
+//   * it declares no `features`. `features` is the key that mounts the toggle, slider,
+//     dropdown, or press button on a tile; without it the card renders the entity's
+//     name, icon, and state and nothing that can be operated. A tile here that grows a
+//     `features` list has become a live control and is exactly what this rejects.
+//   * all three interactions are pinned to a reading action. The pin matters most for
+//     `icon_tap_action`, which Home Assistant defaults to `toggle` on a toggleable
+//     domain, so an unpinned icon is a switch even though no key in the card says so.
+//
+// That shape is what makes a configuration value safe to display on a read-only page:
+// the value is legible and there is no path from the card to a service call.
+function isInertTile(value) {
+  if (!value || typeof value !== "object" || value.type !== "tile") return false;
+  if ("features" in value) return false;
+  return PINNED_TILE_ACTIONS.every((field) => {
+    const action = value[field];
+    return Boolean(action) && typeof action === "object" && READ_ACTIONS.has(action.action);
+  });
+}
+
+function countInertTileEntities(value, counts) {
+  if (Array.isArray(value)) {
+    for (const child of value) countInertTileEntities(child, counts);
+    return counts;
+  }
+  if (!value || typeof value !== "object") return counts;
+  if (isInertTile(value) && counts.has(value.entity)) counts.set(value.entity, counts.get(value.entity) + 1);
+  for (const child of Object.values(value)) countInertTileEntities(child, counts);
+  return counts;
+}
+
+function countTextualReferences(value, counts) {
+  if (typeof value === "string") {
+    for (const match of value.matchAll(ENTITY_REFERENCE_PATTERN)) {
+      if (counts.has(match[0])) counts.set(match[0], counts.get(match[0]) + 1);
+    }
+  } else if (Array.isArray(value)) {
+    for (const child of value) countTextualReferences(child, counts);
+  } else if (value && typeof value === "object") {
+    for (const child of Object.values(value)) countTextualReferences(child, counts);
+  }
+  return counts;
+}
+
+// Counted, not allow-listed. An allow-set keyed by entity id would say "this id is on
+// a good tile" and then wave through a second, unrelated mention of the same id in a
+// markdown card or an entities row. An inert tile contributes exactly one textual
+// occurrence of its own entity id, so an entity whose inert-tile count and textual
+// count disagree is named somewhere the tile rule does not cover, and that is an error
+// whether or not it also has a legitimate tile.
+function controlEntitiesOutsideInertTiles(config, references) {
+  const controlled = [...references].filter((entityId) => CONTROL_DOMAINS.has(entityId.split(".", 1)[0]));
+  const onTiles = countInertTileEntities(config, new Map(controlled.map((entityId) => [entityId, 0])));
+  const inText = countTextualReferences(config, new Map(controlled.map((entityId) => [entityId, 0])));
+  return controlled.filter((entityId) => onTiles.get(entityId) !== inText.get(entityId));
+}
+
 export function validateDashboard(config, liveStates) {
   if (!config || !Array.isArray(config.views) || config.views.length === 0) {
     throw new Error("Dashboard must contain at least one view");
@@ -77,8 +140,10 @@ export function validateDashboard(config, liveStates) {
   const references = collectEntityReferences(config);
   const missing = [...references].filter((entityId) => !liveIds.has(entityId));
   if (missing.length) throw new Error(`Dashboard references missing live entities: ${missing.join(", ")}`);
-  const controlled = [...references].filter((entityId) => CONTROL_DOMAINS.has(entityId.split(".", 1)[0]));
-  if (controlled.length) throw new Error(`Read-only dashboard must not reference control entities: ${controlled.join(", ")}`);
+  const escaped = controlEntitiesOutsideInertTiles(config, references);
+  if (escaped.length) {
+    throw new Error(`Read-only dashboard must reference control entities only as the entity of an inert tile: ${escaped.join(", ")}`);
+  }
 
   let cardCount = 0;
   function inspect(value) {
