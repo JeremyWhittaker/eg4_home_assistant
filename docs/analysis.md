@@ -156,3 +156,67 @@ Three design decisions follow from the inventory rather than from taste:
 - Discovery no longer fails the whole page when one entity cannot be resolved. With 137 entities in the contract, the chance that the integration renames or drops one is real, and a hard failure would take down the entire panel instead of reporting the single gap. Each failure is returned as a reason and surfaced on the page.
 - Those reasons never quote an entity id. The deployer treats any dotted lowercase token in the configuration as an entity reference and requires it to exist in live state, so a diagnostic message naming a missing entity would fail the deployment it was written to explain.
 - The R/S/T voltage legs, the generator registers, and the EPS phase readings are shown with a note saying why they read zero on this split-phase, generator-less installation. They are real registers publishing real zeros, not broken sensors, and a page that shows them without saying so invites exactly the misreading this revision was written to correct.
+
+## Local-dongle coverage: the per-cell detail the cloud hides
+
+Addition date: 2026-09-15 (America/Phoenix)
+
+The revamp above closed the gap on the cloud integration. It did not, and could not, close the gap the cloud integration itself has: the EG4 monitoring cloud aggregates the two battery modules into one bank and never returns per-cell data. That data does exist on the hardware. The sibling project `~/projects/eg4_local_monitor` reverse-engineered the WiFi dongle's LuxPower/Modbus protocol and validated a decoder that harvests all 381 input registers, including the BMS block the cloud drops: cell voltage max and min, the max−min delta that reads pack balance and health, pack capacity, module count, and — provisionally — cell temperatures, cycle count, pack current, and state of health. On this firmware the dongle exposes that telemetry but not the hold/settings registers, so a local view can report but never control.
+
+A sibling agent is packaging that decoder as a Home Assistant integration, `eg4_local`, that publishes those decoded fields as `sensor` entities on a device modelled **EG4 18kPV (local dongle)**. This dashboard was extended to show them, so that a cloud-only, a local-only, or a both-installed system each gets a coherent panel.
+
+### How the local entities are resolved
+
+The local entities are resolved exactly the way the cloud entities are: by the Home Assistant device relationship plus the integration's own semantic original name, never by a written-down entity id. The `LOCAL_ENTITIES` contract in `src/discovery.mjs` lists `[domain, originalName, options]` for each field; the local device is whichever enabled device carries `eg4_local`-platform entities (the integration domain is a stable, configuration-independent identifier, unlike a serial or an entity id), with a `"local dongle"` model/name hint only to break ties. Resolving by name rather than by id is deliberate: it keeps the repo free of id literals (the lint test forbids them in `src/`), and it is drift-tolerant across two repositories built in parallel — if the sibling ships a slightly different original name, that one field reports as unresolved and its card degrades, rather than the page breaking.
+
+The integration is contracted to publish deterministic object ids so the two repos can be reconciled by inspection. The 43 fields, their expected original names, and the entity ids they produce (`sensor.eg4_local_<slug-of-original-name>`) are:
+
+| field / original name | expected entity id | confidence |
+| --- | --- | --- |
+| Cell Voltage Delta | `sensor.eg4_local_cell_voltage_delta` | confirmed — the headline |
+| Cell Voltage Max | `sensor.eg4_local_cell_voltage_max` | confirmed |
+| Cell Voltage Min | `sensor.eg4_local_cell_voltage_min` | confirmed |
+| Pack Capacity | `sensor.eg4_local_pack_capacity` | confirmed |
+| Battery Modules | `sensor.eg4_local_battery_modules` | confirmed |
+| Cell Temperature Max | `sensor.eg4_local_cell_temperature_max` | provisional |
+| Cell Temperature Min | `sensor.eg4_local_cell_temperature_min` | provisional |
+| BMS Pack Current | `sensor.eg4_local_bms_pack_current` | provisional |
+| Cycle Count | `sensor.eg4_local_cycle_count` | provisional |
+| State of Health | `sensor.eg4_local_state_of_health` | provisional |
+| Remaining Capacity | `sensor.eg4_local_remaining_capacity` | provisional |
+| State of Charge | `sensor.eg4_local_state_of_charge` | confirmed |
+| Battery Voltage | `sensor.eg4_local_battery_voltage` | confirmed |
+| Battery Charge Power | `sensor.eg4_local_battery_charge_power` | confirmed |
+| Battery Discharge Power | `sensor.eg4_local_battery_discharge_power` | confirmed |
+| PV1/PV2/PV3 Voltage | `sensor.eg4_local_pv{1,2,3}_voltage` | confirmed |
+| PV1/PV2/PV3 Power | `sensor.eg4_local_pv{1,2,3}_power` | confirmed |
+| Grid Voltage R | `sensor.eg4_local_grid_voltage_r` | confirmed (L1–L2 on split-phase) |
+| Grid Frequency | `sensor.eg4_local_grid_frequency` | confirmed |
+| Inverter Power | `sensor.eg4_local_inverter_power` | confirmed |
+| Power to Grid | `sensor.eg4_local_power_to_grid` | confirmed |
+| Power to User | `sensor.eg4_local_power_to_user` | confirmed |
+| Power Factor | `sensor.eg4_local_power_factor` | confirmed |
+| Inverter Internal Temperature | `sensor.eg4_local_inverter_internal_temperature` | confirmed |
+| Radiator 1/2 Temperature | `sensor.eg4_local_radiator_{1,2}_temperature` | confirmed |
+| Charge/Discharge/Export/Import Energy Today | `sensor.eg4_local_{charge,discharge,export,import}_energy_today` | confirmed |
+| Charge/Discharge/Export/Import Energy Total | `sensor.eg4_local_{charge,discharge,export,import}_energy_total` | confirmed |
+| Inverter State | `sensor.eg4_local_inverter_state` | provisional |
+| Runtime | `sensor.eg4_local_runtime` | confirmed |
+| Fault Code | `sensor.eg4_local_fault_code` | confirmed |
+| Warning Code | `sensor.eg4_local_warning_code` | confirmed |
+| Inverter Serial | `sensor.eg4_local_inverter_serial` | confirmed |
+
+The inverter-side "battery temp" register (reg67) is deliberately **not** in this contract. The decoder demoted it as untrustworthy — it reads an implausible value on this unit — so the reading that reflects the modules is the BMS cell temperature, and nothing on the page claims a battery temperature from the inverter probe.
+
+### Honesty about confidence
+
+Every field the `eg4_local_monitor` decoder marks provisional carries `provisional: true` in the contract, and the dashboard labels it **(provisional)** in the card name — the cell temperatures, cycle count, pack current, state of health, remaining capacity, and inverter state. The confirmed per-cell figures — cell voltage max, min, delta, pack capacity, module count — carry no such tag. This mirrors the source project's confidence discipline exactly: a value that was read correctly but whose scale or meaning is reasoned rather than cross-confirmed is shown because hiding it would be worse, but is never presented as fact.
+
+### Two new views, and graceful degradation
+
+The addition ships two Sections views:
+
+- **Battery Cells** (`/cells`) — the star. It leads with a markdown header that explains, in plain language, that the page shows two independent integrations (`eg4_web_monitor` and `eg4_local`), that the local dongle exposes the per-cell detail the cloud does not, and that either can run alone — Home Assistant's data source is simply whichever integration is enabled, so there is no runtime switch to flip. The cell-balance section is built around a gauge on the cell voltage **delta**, banded green/yellow/red on typical LiFePO4 balance thresholds, because the delta is the single most useful health number the cloud cannot show. Below it are the confirmed cell voltages and capacity, a clearly-flagged provisional section, and a 24-hour cell trend.
+- **Local Inverter** (`/local`) — the standalone local view: PV strings, battery, grid & AC, the inverter's own temperatures, energy today and lifetime, and status/identity, all read from the dongle. It exists so a local-only installation has a complete inverter panel of its own.
+
+Graceful degradation is by construction and mirrors the existing missing-telemetry pattern. When the `eg4_local` integration is not installed, the local device does not exist, so every local field resolves as unresolved with a reason, `discovery.local.available` is false, and no local entity id is referenced anywhere. The **Local Inverter** view has no unconditional card, so it drops out entirely. The **Battery Cells** view keeps only its header, which now reads "**Local dongle: not detected**" and tells the reader how to get the data — the page still builds, cloud-only, with the cloud-vs-local story intact. The local unresolved entries are tagged `source: "local"` so they never pollute the cloud "did not find" report; local absence is the expected state until the integration is installed, not an error. `discovery.local` is a separate namespace from the cloud `entities`/`catalog`/`unresolved`, so every count and guarantee the rest of the code asserts against the 137-entity cloud contract is untouched.

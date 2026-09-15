@@ -198,9 +198,13 @@ function renderedEntityIds(config) {
 // healthy discovery withholds nothing, and a name appearing here is a hole in the
 // layout to be closed rather than a policy being enforced.
 export function withheldEntities(discovery) {
-  const catalog = discovery.catalog ?? {};
   const rendered = renderedEntityIds(buildDashboard(discovery));
-  const keys = Object.values(catalog)
+  // Both sources are checked: the cloud catalog and the local-dongle catalog. Each item
+  // is keyed by its own unique entity id, so a cloud key and a local key that happen to
+  // share a name (pv1Power, gridFrequency, and the like) are still counted separately.
+  const catalogs = [discovery.catalog ?? {}, discovery.local?.catalog ?? {}];
+  const keys = catalogs
+    .flatMap((catalog) => Object.values(catalog))
     .filter((item) => item.entityId && !rendered.has(item.entityId))
     .map((item) => item.key)
     .sort();
@@ -421,6 +425,261 @@ function disabledEntitiesNote() {
     "",
     "A disabled entity holds no state at all, so no card can show one. Enabling any of them on its device page gives it state, after which the next deployment can surface it.",
   ].join("\n"));
+}
+
+// The cloud-vs-local explainer that heads the Battery Cells page. It states plainly that
+// the page shows two independent integrations, that the local dongle exposes the per-cell
+// detail the cloud does not, and that either can run alone — Home Assistant's source is
+// simply whichever integration is enabled, so there is no runtime switch to flip. The last
+// line reports whether the local dongle is currently detected, which is how a cloud-only
+// installation learns what it is missing and how to get it.
+function localSourceNote(discovery) {
+  const present = discovery.local?.available;
+  return markdown([
+    "### Cloud and local, side by side",
+    "",
+    "This inverter can report through two independent Home Assistant integrations, and this dashboard shows whichever are installed:",
+    "",
+    "- **EG4 cloud** (`eg4_web_monitor`) — the account and plant view behind the Live, Energy, Solar, Battery, Grid, Trends, Equipment, Configuration, and Station pages. It aggregates the two battery modules into one bank and never returns per-cell detail.",
+    "- **Local dongle** (`eg4_local`) — a direct read of the WiFi dongle on your own network. It surfaces the data the cloud hides: per-cell voltage max, min, and the max−min **delta** that reads pack balance and health, plus pack capacity, module count, and provisional cell temperatures and cycle count.",
+    "",
+    "Either can run on its own. There is no switch to flip on this page — Home Assistant's data source is whichever integration is enabled, and the page renders what is present. You choose cloud credentials, a local dongle IP, or both in the integrations' own setup.",
+    "",
+    present
+      ? "**Local dongle: connected.** The per-cell cards below are live."
+      : "**Local dongle: not detected.** The per-cell cards stay empty until the `eg4_local` integration is installed and pointed at the dongle. The rest of this dashboard keeps running from the cloud integration.",
+  ].join("\n"));
+}
+
+function localProvisionalNote() {
+  return markdown([
+    "### About the provisional readings",
+    "",
+    "Fields tagged **(provisional)** are read correctly off the dongle, but their scale or meaning is reasoned from the LuxPower/EG4 register family rather than confirmed independently on this unit — the cell temperatures, cycle count, pack current, state of health, and remaining capacity. They are shown because hiding them would be worse, never as confirmed fact.",
+    "",
+    "The confirmed per-cell figures are the cell voltage max, min, and delta, the pack capacity, and the module count. The inverter's own \"battery probe\" register is not shown at all: the decoder demoted it as untrustworthy, and the reading that reflects the modules is the BMS cell temperature here.",
+  ].join("\n"));
+}
+
+// Resolved local entities that are currently reporting nothing, mirroring the cloud
+// missingTelemetryCard: a live filter that stays empty while the dongle is healthy.
+function localMissingTelemetryCard(le) {
+  const rows = entityRows(le, [
+    ["cellVoltageDelta", "Cell voltage delta"],
+    ["cellVoltageMax", "Max cell voltage"],
+    ["cellVoltageMin", "Min cell voltage"],
+    ["packCapacity", "Pack capacity"],
+    ["batteryModules", "Battery modules"],
+    ["localSoc", "State of charge"],
+  ]);
+  if (!rows.length) return null;
+  return {
+    type: "entity-filter",
+    state_filter: ["unknown", "unavailable"],
+    show_empty: false,
+    entities: rows,
+    card: {
+      type: "entities",
+      title: "Unavailable local telemetry",
+      show_header_toggle: false,
+      state_color: true,
+    },
+    grid_options: { columns: "full" },
+  };
+}
+
+// The Battery Cells page: the per-cell BMS detail the cloud hides, built around the local
+// dongle. The header is unconditional so a cloud-only installation still gets the
+// cloud-vs-local explanation and learns the dongle is not connected; every data card is
+// gated on a resolved local entity, so when the local integration is absent the data
+// sections drop out and only the explainer remains — the page still builds.
+function batteryCellsView(discovery) {
+  const le = discovery.local?.entities ?? {};
+  const live = Boolean(discovery.local?.available);
+  return view({
+    title: "Battery Cells",
+    path: "cells",
+    icon: "mdi:battery-heart-variant",
+    badges: badges(le, [
+      ["cellVoltageDelta", "Cell delta", "mdi:battery-sync"],
+      ["cellVoltageMax", "Cell max", "mdi:battery-high"],
+      ["cellVoltageMin", "Cell min", "mdi:battery-low"],
+      ["batteryModules", "Modules", "mdi:battery-multiple"],
+    ]),
+    sections: [
+      gridSection([
+        heading("Per-cell battery detail (local dongle)", "mdi:battery-heart-variant"),
+        localSourceNote(discovery),
+        localMissingTelemetryCard(le),
+      ]),
+      gridSection([
+        heading("Cell balance", "mdi:battery-sync"),
+        has(le, "cellVoltageDelta")
+          ? {
+            type: "gauge",
+            entity: le.cellVoltageDelta,
+            name: "Cell voltage delta (max − min)",
+            unit: "mV",
+            min: 0,
+            max: 200,
+            needle: true,
+            // Higher delta is worse: a tight pack sits low and green, a drifting or
+            // failing one climbs into yellow and red. Thresholds are typical LiFePO4
+            // balance bands, shown as guidance rather than a calibrated alarm.
+            severity: { green: 0, yellow: 50, red: 100 },
+            grid_options: { columns: "full", rows: 3 },
+          }
+          : null,
+        ...tiles(le, [
+          ["cellVoltageMax", "Max cell voltage", "mdi:battery-high"],
+          ["cellVoltageMin", "Min cell voltage", "mdi:battery-low"],
+        ]),
+        live
+          ? markdown("**Delta is the headline.** It is the highest cell's voltage minus the lowest across the whole pack. A small delta means the cells are balanced; a delta that grows over time — especially near full or empty — is the earliest sign of a weak cell or a balancing problem, and it is exactly what the cloud API does not report.")
+          : null,
+      ]),
+      gridSection([
+        heading("Cell voltages and capacity", "mdi:battery-heart-variant"),
+        entitiesCard("Confirmed per-cell", entityRows(le, [
+          ["cellVoltageMax", "Max cell voltage", "mdi:battery-high"],
+          ["cellVoltageMin", "Min cell voltage", "mdi:battery-low"],
+          ["cellVoltageDelta", "Cell voltage delta (max − min)", "mdi:battery-sync"],
+          ["packCapacity", "Pack capacity", "mdi:battery"],
+          ["batteryModules", "Battery modules", "mdi:battery-multiple"],
+        ])),
+      ]),
+      gridSection([
+        heading("Provisional BMS detail", "mdi:alert-outline"),
+        live ? localProvisionalNote() : null,
+        entitiesCard("Provisional readings", entityRows(le, [
+          ["cellTempMax", "Max cell temperature (provisional)", "mdi:thermometer-high"],
+          ["cellTempMin", "Min cell temperature (provisional)", "mdi:thermometer-low"],
+          ["bmsPackCurrent", "BMS pack current (provisional)", "mdi:current-dc"],
+          ["cycleCount", "Cycle count (provisional)", "mdi:battery-sync-outline"],
+          ["stateOfHealth", "State of health (provisional)", "mdi:heart-pulse"],
+          ["remainingCapacity", "Remaining capacity (provisional)", "mdi:battery-70"],
+        ])),
+      ]),
+      gridSection([
+        heading("Cell trend · 24 hours", "mdi:chart-line"),
+        historyGraph("Cell voltage max, min, and delta", 24, entityRows(le, [
+          ["cellVoltageMax", "Max cell voltage"],
+          ["cellVoltageMin", "Min cell voltage"],
+          ["cellVoltageDelta", "Delta (max − min)"],
+        ]), 6),
+      ]),
+    ],
+  });
+}
+
+// The standalone local-inverter page: everything the dongle reports besides the per-cell
+// block, so a local-only installation has a full inverter view of its own. It is built
+// only when the local dongle is present — every card, including the header note, is gated,
+// so with no local integration the whole view drops rather than showing an empty shell.
+function localInverterView(discovery) {
+  const le = discovery.local?.entities ?? {};
+  if (!discovery.local?.available) return null;
+  return view({
+    title: "Local Inverter",
+    path: "local",
+    icon: "mdi:lan-connect",
+    badges: badges(le, [
+      ["localSoc", "Battery", "mdi:home-battery"],
+      ["inverterPower", "Inverter", "mdi:flash"],
+      ["gridFrequency", "Frequency", "mdi:current-ac"],
+    ]),
+    sections: [
+      gridSection([
+        heading("Local dongle (direct Modbus)", "mdi:lan-connect"),
+        markdown("These readings come straight from the WiFi dongle on your network over Modbus, independent of the EG4 cloud. On this firmware the dongle exposes live telemetry but not the hold/settings registers, so this page reports and never controls — the same read-only rule as the rest of the dashboard."),
+      ]),
+      gridSection([
+        heading("Solar strings", "mdi:solar-panel-large"),
+        distribution("String contribution", [
+          series(le, "pv1Power", "String 1", "#f9a825"),
+          series(le, "pv2Power", "String 2", "#fbc02d"),
+          series(le, "pv3Power", "String 3", "#fdd835"),
+        ]),
+        ...tiles(le, [
+          ["pv1Power", "String 1 power", "mdi:solar-panel"],
+          ["pv2Power", "String 2 power", "mdi:solar-panel"],
+          ["pv3Power", "String 3 power", "mdi:solar-panel"],
+        ]),
+        entitiesCard("String voltages", entityRows(le, [
+          ["pv1Voltage", "String 1 voltage", "mdi:sine-wave"],
+          ["pv2Voltage", "String 2 voltage", "mdi:sine-wave"],
+          ["pv3Voltage", "String 3 voltage", "mdi:sine-wave"],
+        ])),
+      ]),
+      gridSection([
+        heading("Battery", "mdi:home-battery"),
+        has(le, "localSoc")
+          ? {
+            type: "gauge",
+            entity: le.localSoc,
+            name: "State of charge",
+            min: 0,
+            max: 100,
+            needle: true,
+            severity: { red: 0, yellow: 20, green: 50 },
+            grid_options: { columns: "full", rows: 3 },
+          }
+          : null,
+        ...tiles(le, [
+          ["batteryVoltage", "Battery voltage", "mdi:sine-wave"],
+          ["batteryChargePower", "Charge power", "mdi:battery-arrow-up"],
+          ["batteryDischargePower", "Discharge power", "mdi:battery-arrow-down"],
+        ]),
+        markdown("Per-cell voltage, delta, capacity, and the provisional cell temperatures live on the **Battery Cells** page — that is the detail the cloud cannot see."),
+      ]),
+      gridSection([
+        heading("Grid & AC", "mdi:transmission-tower"),
+        entitiesCard("AC and grid", entityRows(le, [
+          ["inverterPower", "Inverter power", "mdi:flash"],
+          ["powerToGrid", "Power to grid (export)", "mdi:transmission-tower-export"],
+          ["powerToUser", "Power to user (import)", "mdi:transmission-tower-import"],
+          ["gridVoltage", "Grid voltage (L1–L2)", "mdi:sine-wave"],
+          ["gridFrequency", "Grid frequency", "mdi:current-ac"],
+          ["powerFactor", "Power factor", "mdi:angle-acute"],
+        ])),
+        markdown("This 18kPV is split-phase; the dongle's grid-voltage R register is the L1–L2 service reading, and the unused S and T legs are not surfaced here."),
+      ]),
+      gridSection([
+        heading("Temperatures", "mdi:thermometer-lines"),
+        markdown("These three are the inverter's own sensors — its internal temperature and its two heatsinks. They are inverter readings, not module ones; the reading that reflects the modules is the per-cell BMS figure on the **Battery Cells** page. The inverter-side battery probe is not shown, because the decoder found it untrustworthy on this unit."),
+        ...tiles(le, [
+          ["internalTemperature", "Inverter internal", "mdi:thermometer"],
+          ["radiator1Temperature", "Radiator 1 (heatsink)", "mdi:radiator"],
+          ["radiator2Temperature", "Radiator 2 (heatsink)", "mdi:radiator"],
+        ]),
+      ]),
+      gridSection([
+        heading("Energy", "mdi:counter"),
+        entitiesCard("Today", entityRows(le, [
+          ["chargeEnergyToday", "Battery charged", "mdi:battery-arrow-up"],
+          ["dischargeEnergyToday", "Battery discharged", "mdi:battery-arrow-down"],
+          ["exportEnergyToday", "Exported", "mdi:transmission-tower-export"],
+          ["importEnergyToday", "Imported", "mdi:transmission-tower-import"],
+        ])),
+        entitiesCard("Lifetime", entityRows(le, [
+          ["chargeEnergyTotal", "Battery charged", "mdi:battery-arrow-up"],
+          ["dischargeEnergyTotal", "Battery discharged", "mdi:battery-arrow-down"],
+          ["exportEnergyTotal", "Exported", "mdi:transmission-tower-export"],
+          ["importEnergyTotal", "Imported", "mdi:transmission-tower-import"],
+        ])),
+      ]),
+      gridSection([
+        heading("Status and identity", "mdi:identifier"),
+        entitiesCard("Inverter", entityRows(le, [
+          ["inverterState", "Inverter state (provisional)", "mdi:state-machine"],
+          ["runtime", "Runtime", "mdi:timer-outline"],
+          ["faultCode", "Fault code", "mdi:alert-circle-outline"],
+          ["warningCode", "Warning code", "mdi:alert-outline"],
+          ["inverterSerial", "Inverter serial", "mdi:barcode"],
+        ]), { stateColor: true }),
+      ]),
+    ],
+  });
 }
 
 export function buildDashboard(discovery) {
@@ -674,6 +933,10 @@ export function buildDashboard(discovery) {
         ]),
       ],
     }),
+
+    batteryCellsView(discovery),
+
+    localInverterView(discovery),
 
     view({
       title: "Grid & AC",

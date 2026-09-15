@@ -63,3 +63,27 @@ The nine routes are `/live`, `/energy`, `/solar`, `/battery`, `/grid`, `/perform
 | Round-trip, rollback, and restore | deferred | `verifyDashboard` re-reads metadata and configuration after the save; a checksum- and drift-guarded `--restore` is exercised |
 | No serial, station address, or token in the repository | deferred | Secret scan before closeout; the live entity inventory stays a working artifact outside the repository, and the station address exists only as a semantic entity name in the discovery contract |
 | Visual QA runner covers the new routes | blocked | `scripts/visual-qa.mjs` still enumerates the four routes of the previous design. Until that list holds all nine, the runner will report a clean pass while never opening Solar, Battery, Grid & AC, Configuration, or Station |
+
+## Local-dongle view gates (2026-09-15)
+
+These gates cover the two views added for the `eg4_local` integration — **Battery Cells** (`/cells`) and **Local Inverter** (`/local`) — that surface the per-cell BMS data the EG4 cloud does not expose. The offline gates are `implemented` now; every gate that needs a live `eg4_local` device or a browser is `deferred` until the integration is installed and the rebuilt dashboard is re-inspected, because marking one `implemented` without that evidence would be false.
+
+With the local integration present the routes become `/live`, `/energy`, `/solar`, `/battery`, `/cells`, `/local`, `/grid`, `/performance`, `/system`, `/settings`, `/station`. With it absent, `/local` drops and `/cells` remains as the cloud-vs-local explainer.
+
+| Gate | Status | Evidence |
+| --- | --- | --- |
+| Local contract resolves by device + name, no id literal | implemented | `LOCAL_ENTITIES` in `src/discovery.mjs` is `[domain, originalName, options]`; the local device is matched by `eg4_local` platform; the "no entity id literal in src/" unit test passes |
+| Local entities kept in a separate namespace | implemented | `discovery.local` holds the local `entities`/`catalog`/`unresolved`; the cloud contract stays 137 and every count asserted against it is unchanged; `npm run check` green |
+| Every resolved local entity is on a card | implemented | Unit test resolves all 46 local fields and asserts none is withheld; diagnostic `entities cloud=137 local=46 rendered=183 withheld=0` |
+| Cloud-only build degrades gracefully | implemented | Unit test with the local device absent: `/local` drops, `/cells` stays as the "Local dongle: not detected" explainer, no `sensor.eg4_local_*` reference exists, no `undefined` leaks, and `validateDashboard` passes |
+| Provisional local fields labelled provisional | implemented | Unit test asserts every `provisional:true` field is named with "(provisional)" on some card; reg67 inverter-side probe is not in the contract and no "battery temperature" claim appears |
+| Cell delta is the headline | implemented | The `/cells` view leads with a gauge bound to `cell voltage delta`, banded green/yellow/red; unit test confirms the gauge entity is the delta |
+| Native cards only on the local views | implemented | Both views use only `heading`, `markdown`, `tile`, `gauge`, `entities`, `entity-filter`, `distribution`, and `history-graph`; all in `ALLOWED_TYPES`; no `custom:*` |
+| Local views are read-only | implemented | Every `tile`/`entity`/badge on the local views carries `noControlActions()`; all local entities are `sensor`; the actuation unit tests pass over the whole dashboard |
+| Deterministic ids match the integration | deferred | Cross-check the live `eg4_local` entity ids against the table in `docs/analysis.md`; any mismatch shows as an unresolved field on the page rather than a crash, and is reconciled by aligning the original name |
+| Battery Cells renders real per-cell values | deferred | With the dongle connected, cell voltage max/min/delta, pack capacity, and module count show live values; the provisional section shows cell temps, cycle count, pack current, and SOH; the delta gauge sits in its expected band |
+| Local Inverter stands on its own | deferred | With the dongle connected, `/local` shows PV strings, battery, grid & AC, inverter temperatures, energy today/lifetime, and status/identity, all from the dongle, with no `unknown` on a healthy system |
+| Local missing-telemetry card behaves | deferred | The `/cells` `entity-filter` stays hidden while the dongle is healthy and lists the affected rows when a local reading goes `unknown`/`unavailable` |
+| Phone and desktop layout of the local views | deferred | `/cells` and `/local` scrolled top to bottom at 390×844 and at `max_columns` 1920×1080: no horizontal scroll, no clipped names, the delta gauge and charts keep a readable aspect |
+| Light and dark theme of the local views | deferred | `/cells` and `/local` inspected in both modes; the delta gauge bands and the distribution palette stay legible |
+| Visual QA runner covers `/cells` and `/local` | blocked | `scripts/visual-qa.mjs` must add the two new routes before its report can be read as full coverage |

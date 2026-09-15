@@ -20,6 +20,17 @@ const ENTITY_ID_PATTERN = /^[a-z_]+\.[a-z0-9_]+$/;
 // send it a command; see configurationTile in src/dashboard.mjs.
 export const REPORTING_DOMAINS = Object.freeze(new Set(["sensor", "binary_sensor", "update"]));
 
+// The integration platform (Home Assistant "platform"/domain) each entity is published
+// by. The cloud integration is eg4_web_monitor; the sibling local-dongle integration is
+// eg4_local. These are integration domains, not entity ids or serials, so they are stable
+// configuration-independent identifiers the discovery can safely match on.
+export const CLOUD_PLATFORM = "eg4_web_monitor";
+export const LOCAL_PLATFORM = "eg4_local";
+
+// A hint used only to prefer the right device when several carry eg4_local entities. The
+// authoritative match is the platform above; this only breaks ties.
+const LOCAL_DEVICE_HINT = "local dongle";
+
 const INVERTER_ENTITIES = Object.freeze({
   // Solar strings. The 18KPV reports power, voltage, and current per MPPT input.
   pvPower: ["sensor", "PV Total Power"],
@@ -198,6 +209,85 @@ const STATION_ENTITIES = Object.freeze({
   stationRefreshData: ["button", "Refresh Data", { group: "Actions" }],
 });
 
+// The local-dongle contract. The sibling eg4_local integration reads the same
+// eg4_local_monitor decoder this dashboard's docs cite, and publishes its decoded fields
+// as sensor entities with deterministic object ids under the eg4_local_ prefix, on a
+// device modelled "EG4 18kPV (local dongle)". This dashboard resolves them the way it resolves
+// the cloud entities -- by the device relationship plus the integration's own semantic
+// original name -- never by a written-down entity id (the lint test forbids id literals
+// in src/, and resolving by name is drift-tolerant across two independently built repos).
+// The <field> object-id each original name is expected to carry is recorded in
+// docs/analysis.md so the two repos stay aligned; if the sibling ships a slightly
+// different original name the entity simply reports as unresolved and the view degrades,
+// rather than the page breaking.
+//
+// The headline of this set is the per-cell BMS detail the EG4 cloud API does not expose:
+// cell voltage max/min and, above all, the max-min DELTA that reads pack balance/health.
+// Fields whose scale or meaning the decoder marks provisional (cell temps, cycle count,
+// pack current, SOH, remaining capacity, inverter state) carry provisional:true so the
+// dashboard labels them provisional and never presents them as confirmed fact. reg67 (the
+// inverter-side "battery temp") is deliberately absent: the decoder demoted it as
+// untrustworthy, so it is not part of this contract.
+const LOCAL_ENTITIES = Object.freeze({
+  // -- BMS / per-cell detail: the data the cloud hides. --
+  cellVoltageDelta: ["sensor", "Cell Voltage Delta", { group: "Cells" }],
+  cellVoltageMax: ["sensor", "Cell Voltage Max", { group: "Cells" }],
+  cellVoltageMin: ["sensor", "Cell Voltage Min", { group: "Cells" }],
+  packCapacity: ["sensor", "Pack Capacity", { group: "Cells" }],
+  batteryModules: ["sensor", "Battery Modules", { group: "Cells" }],
+  cellTempMax: ["sensor", "Cell Temperature Max", { group: "Cells", provisional: true }],
+  cellTempMin: ["sensor", "Cell Temperature Min", { group: "Cells", provisional: true }],
+  bmsPackCurrent: ["sensor", "BMS Pack Current", { group: "Cells", provisional: true }],
+  cycleCount: ["sensor", "Cycle Count", { group: "Cells", provisional: true }],
+  stateOfHealth: ["sensor", "State of Health", { group: "Cells", provisional: true }],
+  remainingCapacity: ["sensor", "Remaining Capacity", { group: "Cells", provisional: true }],
+
+  // -- Battery pack, measured locally. --
+  localSoc: ["sensor", "State of Charge", { group: "Battery" }],
+  batteryVoltage: ["sensor", "Battery Voltage", { group: "Battery" }],
+  batteryChargePower: ["sensor", "Battery Charge Power", { group: "Battery" }],
+  batteryDischargePower: ["sensor", "Battery Discharge Power", { group: "Battery" }],
+
+  // -- PV strings (local). --
+  pv1Voltage: ["sensor", "PV1 Voltage", { group: "PV" }],
+  pv2Voltage: ["sensor", "PV2 Voltage", { group: "PV" }],
+  pv3Voltage: ["sensor", "PV3 Voltage", { group: "PV" }],
+  pv1Power: ["sensor", "PV1 Power", { group: "PV" }],
+  pv2Power: ["sensor", "PV2 Power", { group: "PV" }],
+  pv3Power: ["sensor", "PV3 Power", { group: "PV" }],
+
+  // -- Grid & AC (local). --
+  gridVoltage: ["sensor", "Grid Voltage R", { group: "Grid" }],
+  gridFrequency: ["sensor", "Grid Frequency", { group: "Grid" }],
+  inverterPower: ["sensor", "Inverter Power", { group: "Grid" }],
+  powerToGrid: ["sensor", "Power to Grid", { group: "Grid" }],
+  powerToUser: ["sensor", "Power to User", { group: "Grid" }],
+  powerFactor: ["sensor", "Power Factor", { group: "Grid" }],
+
+  // -- Temperatures. These are the inverter's own sensors, not battery ones; the local
+  // battery temperature is the BMS cell temperature above. reg67 is not exposed. --
+  internalTemperature: ["sensor", "Inverter Internal Temperature", { group: "Temperatures" }],
+  radiator1Temperature: ["sensor", "Radiator 1 Temperature", { group: "Temperatures" }],
+  radiator2Temperature: ["sensor", "Radiator 2 Temperature", { group: "Temperatures" }],
+
+  // -- Energy (local). --
+  chargeEnergyToday: ["sensor", "Charge Energy Today", { group: "Energy" }],
+  dischargeEnergyToday: ["sensor", "Discharge Energy Today", { group: "Energy" }],
+  exportEnergyToday: ["sensor", "Export Energy Today", { group: "Energy" }],
+  importEnergyToday: ["sensor", "Import Energy Today", { group: "Energy" }],
+  chargeEnergyTotal: ["sensor", "Charge Energy Total", { group: "Energy" }],
+  dischargeEnergyTotal: ["sensor", "Discharge Energy Total", { group: "Energy" }],
+  exportEnergyTotal: ["sensor", "Export Energy Total", { group: "Energy" }],
+  importEnergyTotal: ["sensor", "Import Energy Total", { group: "Energy" }],
+
+  // -- Status & identity (local). --
+  inverterState: ["sensor", "Inverter State", { group: "Status", provisional: true }],
+  runtime: ["sensor", "Runtime", { group: "Status" }],
+  faultCode: ["sensor", "Fault Code", { group: "Status" }],
+  warningCode: ["sensor", "Warning Code", { group: "Status" }],
+  inverterSerial: ["sensor", "Inverter Serial", { group: "Status" }],
+});
+
 function normalize(value) {
   return String(value ?? "").trim().toLowerCase();
 }
@@ -219,8 +309,12 @@ function stateIds(states) {
   return new Set(states.map((state) => state.entity_id));
 }
 
+function hasPlatformEntity(entities, deviceId, platform) {
+  return entities.some((entity) => entity.device_id === deviceId && entity.platform === platform);
+}
+
 function hasIntegrationEntity(entities, deviceId) {
-  return entities.some((entity) => entity.device_id === deviceId && entity.platform === "eg4_web_monitor");
+  return hasPlatformEntity(entities, deviceId, CLOUD_PLATFORM);
 }
 
 // Resolution never throws for an individual entity. With 137 entities in the contract
@@ -260,7 +354,7 @@ function resolveEntity(registry, liveStateIds, deviceId, spec) {
   return { entityId };
 }
 
-function resolveMap(specification, registry, liveStateIds, device, deviceLabel) {
+function resolveMap(specification, registry, liveStateIds, device, deviceLabel, source = "cloud") {
   const entities = {};
   const catalog = {};
   const unresolved = [];
@@ -271,7 +365,14 @@ function resolveMap(specification, registry, liveStateIds, device, deviceLabel) 
       domain,
       originalName,
       device: deviceLabel,
+      // Which integration published this entity. The dashboard uses it to keep the
+      // cloud "did not find" report from filling up with local entities that are simply
+      // not installed, and to tell the two stories apart on the page.
+      source,
       group: options.group ?? null,
+      // Fields the decoder could read but not independently confirm. The dashboard labels
+      // these provisional and never presents them as fact.
+      provisional: options.provisional ?? false,
       // Where the integration publishes several identically named entities, these say
       // which one this key means, so a listing of names is not ambiguous.
       instance: options.of ? (options.index ?? 0) + 1 : null,
@@ -336,12 +437,26 @@ export function discoverEg4({ devices, entities, states, selector = "" }) {
     ?? selectSingle(stationCandidates)
     ?? null;
 
+  // The local-dongle device is whichever enabled device carries eg4_local entities. It is
+  // an entirely separate integration from the cloud one, so its absence (the common case,
+  // until the local integration is installed) is expected, not an error: the resolver just
+  // returns every local field as unresolved and the local views degrade to their headers.
+  const localCandidates = devices.filter((device) =>
+    device.disabled_by == null && hasPlatformEntity(entities, device.id, LOCAL_PLATFORM),
+  );
+  const localDevice = localCandidates.find((device) =>
+    normalize(device.model).includes(LOCAL_DEVICE_HINT)
+    || normalize(device.name).includes(LOCAL_DEVICE_HINT)
+    || normalize(device.name_by_user).includes(LOCAL_DEVICE_HINT),
+  ) ?? selectSingle(localCandidates) ?? null;
+
   const liveStateIds = stateIds(states);
   const resolved = [
     resolveMap(INVERTER_ENTITIES, entities, liveStateIds, inverter, "inverter"),
     resolveMap(BATTERY_ENTITIES, entities, liveStateIds, battery, "battery bank"),
     resolveMap(STATION_ENTITIES, entities, liveStateIds, station, "station"),
   ];
+  const localResolved = resolveMap(LOCAL_ENTITIES, entities, liveStateIds, localDevice, "local dongle", "local");
 
   const entityMap = Object.assign({}, ...resolved.map((part) => part.entities));
   const catalog = Object.assign({}, ...resolved.map((part) => part.catalog));
@@ -360,6 +475,24 @@ export function discoverEg4({ devices, entities, states, selector = "" }) {
     station: station
       ? { deviceId: station.id, model: station.model || "EG4 station", areaId: station.area_id || null }
       : null,
+    // The local dongle integration is a self-contained source. Its resolved entities,
+    // catalog, and unresolved list live in their own namespace so the cloud contract
+    // (and every count the rest of the code asserts against it) is untouched, and so the
+    // dashboard can render a cloud-only page, a local-only page, or both.
+    local: {
+      device: localDevice
+        ? {
+          deviceId: localDevice.id,
+          model: localDevice.model || "EG4 18kPV (local dongle)",
+          areaId: localDevice.area_id || null,
+        }
+        : null,
+      entities: Object.freeze(localResolved.entities),
+      catalog: Object.freeze(localResolved.catalog),
+      unresolved: Object.freeze(localResolved.unresolved),
+      // True once the local device exists and at least one of its sensors is live.
+      available: Object.keys(localResolved.entities).length > 0,
+    },
     entities: Object.freeze(entityMap),
     catalog: Object.freeze(catalog),
     unresolved: Object.freeze(unresolved),
@@ -371,3 +504,8 @@ export const discoveryContract = Object.freeze({
   battery: BATTERY_ENTITIES,
   station: STATION_ENTITIES,
 });
+
+// The local-dongle contract is exported separately: it is a different integration on a
+// different device, and folding it into discoveryContract would change the cloud contract
+// size that the rest of the code and tests assert against.
+export const localContract = LOCAL_ENTITIES;

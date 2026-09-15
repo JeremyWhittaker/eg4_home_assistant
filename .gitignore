@@ -4,3 +4,8 @@ node_modules/
 artifacts/
 *.log
 
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.venv/

@@ -1,0 +1,45 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "EG4 Inverter (Local Dongle)",
+        "description": "Connect directly to the EG4/LuxPower WiFi dongle over your LAN — no cloud. Enter the details yourself, or scan your network for the dongle.",
+        "menu_options": {
+          "connect": "Enter connection details",
+          "scan": "Scan my network for the dongle"
+        }
+      },
+      "connect": {
+        "title": "EG4 dongle connection",
+        "description": "The dongle answers on TCP port 8000. The serials are printed on the dongle and inverter. {scan_result}",
+        "data": {
+          "host": "Dongle IP address",
+          "port": "Port",
+          "dongle_serial": "Dongle serial",
+          "inverter_serial": "Inverter serial"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach the dongle at that IP and port. Check the address and that nothing else is holding the dongle's single session.",
+      "no_data": "Connected, but no telemetry arrived. The dongle may be busy, or the serials may be wrong. Try again in a moment.",
+      "serial_mismatch": "The dongle reported inverter serial {reported}. Enter that serial instead.",
+      "unknown": "Unexpected error. Check the Home Assistant log for details."
+    },
+    "abort": {
+      "already_configured": "This inverter is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "EG4 local options",
+        "description": "The dongle is single-session and flaky; polling harder than 30 s is discouraged.",
+        "data": {
+          "scan_interval": "Poll interval (seconds)",
+          "expose_provisional": "Expose provisional BMS fields (cell temps, cycle count, pack current). These are read correctly but their scale/meaning is reasoned, not confirmed."
+        }
+      }
+    }
+  }
+}

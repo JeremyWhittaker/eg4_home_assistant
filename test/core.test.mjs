@@ -5,7 +5,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { buildDashboard, dashboardMetadata, withheldEntities } from "../src/dashboard.mjs";
-import { REPORTING_DOMAINS, discoveryContract, discoverEg4 } from "../src/discovery.mjs";
+import { LOCAL_PLATFORM, REPORTING_DOMAINS, discoveryContract, discoverEg4, localContract } from "../src/discovery.mjs";
 import {
   applyDashboard,
   createBackup,
@@ -58,7 +58,7 @@ function slugify(name) {
 
 // The registry fixture is generated from the discovery contract itself, so it mirrors
 // the live installation without any entity id or serial being written down here.
-function registryEntities(deviceId, specification, prefix) {
+function registryEntities(deviceId, specification, prefix, platform = "eg4_web_monitor") {
   const required = new Map();
   for (const spec of Object.values(specification)) {
     const [domain, originalName, options = {}] = spec;
@@ -73,7 +73,7 @@ function registryEntities(deviceId, specification, prefix) {
         entity_id: `${domain}.${prefix}_${slugify(originalName)}${index ? `_${index + 1}` : ""}`,
         device_id: deviceId,
         disabled_by: null,
-        platform: "eg4_web_monitor",
+        platform,
         original_name: originalName,
       });
     }
@@ -81,10 +81,11 @@ function registryEntities(deviceId, specification, prefix) {
   return entities;
 }
 
-function fixture() {
+function fixture({ local = true } = {}) {
   const stationId = "station-device";
   const inverterId = "inverter-device";
   const batteryId = "battery-device";
+  const localId = "local-dongle-device";
   const devices = [
     { id: stationId, manufacturer: "EG4 Electronics", model: "Station", name: "Station House Inverter", disabled_by: null },
     { id: inverterId, manufacturer: "EG4 Electronics", model: "18KPV", name: "18KPV fixture", sw_version: "FAAB-TEST", via_device_id: stationId, disabled_by: null },
@@ -95,6 +96,15 @@ function fixture() {
     ...registryEntities(batteryId, discoveryContract.battery, "bank"),
     ...registryEntities(stationId, discoveryContract.station, "plant"),
   ];
+  // The local-dongle integration is a separate platform on its own device. It is present
+  // only when local === true, so a test can model a cloud-only installation by omitting it.
+  // Its entity ids come out as sensor.eg4_local_<slug>, the deterministic id the sibling
+  // integration is contracted to publish, generated here from the contract's own names so
+  // no id is written down literally.
+  if (local) {
+    devices.push({ id: localId, manufacturer: "EG4 Electronics", model: "EG4 18kPV (local dongle)", name: "EG4 18kPV (local dongle)", via_device_id: inverterId, disabled_by: null });
+    entities.push(...registryEntities(localId, localContract, "eg4_local", LOCAL_PLATFORM));
+  }
   const deviceIds = { inverter: inverterId, battery: batteryId, station: stationId };
   const prefixes = { inverter: "inv", battery: "bank", station: "plant" };
   const disabled = DISABLED_ENTITIES.map(([device, domain, originalName]) => ({
@@ -107,7 +117,7 @@ function fixture() {
   // Disabled entities never reach the state machine, which is exactly why the page
   // cannot show them.
   const states = entities.map((entity) => ({ entity_id: entity.entity_id, state: "1", attributes: {} }));
-  return { devices, entities: [...entities, ...disabled], disabled, states, inverterId, batteryId, stationId };
+  return { devices, entities: [...entities, ...disabled], disabled, states, inverterId, batteryId, stationId, localId };
 }
 
 function contractSize() {
@@ -251,17 +261,24 @@ test("every enabled EG4 entity is rendered on the dashboard and nothing is withh
   const unrendered = resolved.filter(([, entityId]) => !references.has(entityId)).map(([key]) => key);
   assert.deepEqual(unrendered, [], "every resolved entity must be referenced by some card");
 
-  // Nothing is held back any more. The reporting domains are laid out across the
-  // telemetry views; the control domains carry their values on the Configuration view.
+  // The local dongle resolves its whole contract too, and every local entity is on a card.
+  const localResolved = Object.entries(discovery.local.entities);
+  assert.equal(localResolved.length, Object.keys(localContract).length, "the local contract must resolve fully");
+  const localUnrendered = localResolved.filter(([, entityId]) => !references.has(entityId)).map(([key]) => key);
+  assert.deepEqual(localUnrendered, [], "every resolved local entity must be referenced by some card");
+
+  // Nothing is held back any more, cloud or local. The reporting domains are laid out
+  // across the telemetry views; the control domains carry their values on the Configuration
+  // view; the local sensors fill the Battery Cells and Local Inverter views.
   assert.deepEqual(withheldEntities(discovery).keys, [], "the page renders every entity it resolves");
 
-  // Nothing is referenced that discovery did not resolve.
-  const resolvedIds = new Set(Object.values(discovery.entities));
+  // Nothing is referenced that discovery did not resolve, across both sources.
+  const resolvedIds = new Set([...Object.values(discovery.entities), ...Object.values(discovery.local.entities)]);
   assert.deepEqual([...references].filter((entityId) => !resolvedIds.has(entityId)), []);
 
   const controls = Object.values(discovery.catalog).filter((item) => !REPORTING_DOMAINS.has(item.domain));
   assert.equal(controls.length, CONTROL_ENTITY_COUNT);
-  t.diagnostic(`entities resolved=${resolved.length} rendered=${resolved.length - unrendered.length} withheld=0 control=${controls.length}`);
+  t.diagnostic(`entities cloud=${resolved.length} local=${localResolved.length} rendered=${resolved.length - unrendered.length + localResolved.length - localUnrendered.length} withheld=0 control=${controls.length}`);
 });
 
 test("every configuration entity shows its value on an inert tile", () => {
@@ -341,7 +358,7 @@ test("dashboard is native-only, read-only, responsive, and references live entit
   const result = validateDashboard(dashboard, data.states);
   assert.deepEqual(
     dashboard.views.map((view) => view.path),
-    ["live", "energy", "solar", "battery", "grid", "performance", "system", "settings", "station"],
+    ["live", "energy", "solar", "battery", "cells", "local", "grid", "performance", "system", "settings", "station"],
   );
   assert.ok(dashboard.views.every((view) => view.type === "sections"));
   assert.ok(dashboard.views.every((view) => view.sections.length > 0));
@@ -427,6 +444,128 @@ test("the battery view states plainly that two modules are reported as one bank"
   assert.ok(battery.includes("local Modbus dongle transport"));
 });
 
+test("the local dongle contract resolves and fills the Battery Cells and Local Inverter views", () => {
+  const data = fixture();
+  const discovery = discoverEg4(data);
+  assert.ok(discovery.local.device, "the local dongle device must be discovered");
+  assert.equal(discovery.local.device.deviceId, data.localId);
+  assert.equal(discovery.local.available, true);
+  assert.equal(Object.keys(discovery.local.entities).length, Object.keys(localContract).length);
+  assert.deepEqual([...discovery.local.unresolved], []);
+
+  const dashboard = buildDashboard(discovery);
+  const paths = dashboard.views.map((view) => view.path);
+  assert.ok(paths.includes("cells"), "the Battery Cells view is present");
+  assert.ok(paths.includes("local"), "the Local Inverter view is present");
+
+  const cells = dashboard.views.find((view) => view.path === "cells");
+  // The headline is a gauge bound to the cell voltage delta.
+  const gauge = collectCards(cells).find((card) => card.type === "gauge");
+  assert.ok(gauge, "the cells view must carry a gauge");
+  assert.equal(gauge.entity, discovery.local.entities.cellVoltageDelta);
+
+  const cellsText = stableString(cells);
+  assert.ok(cellsText.includes("Cloud and local, side by side"), "the cloud-vs-local header must be present");
+  assert.ok(cellsText.includes("eg4_local"), "the local integration is named");
+  assert.ok(cellsText.includes("the data the cloud hides"), "the page frames the local data as what the cloud hides");
+  assert.ok(cellsText.includes("Local dongle: connected"));
+
+  // The whole thing validates against live state, local references included.
+  const result = validateDashboard(dashboard, data.states);
+  assert.ok(result.references.includes(discovery.local.entities.cellVoltageDelta));
+});
+
+test("the dashboard builds cloud-only when the local dongle is absent", () => {
+  const data = fixture({ local: false });
+  const discovery = discoverEg4(data);
+  assert.equal(discovery.local.device, null);
+  assert.equal(discovery.local.available, false);
+  assert.equal(Object.keys(discovery.local.entities).length, 0);
+  assert.equal(discovery.local.unresolved.length, Object.keys(localContract).length);
+  assert.ok(discovery.local.unresolved.every((item) => item.source === "local"));
+  assert.ok(discovery.local.unresolved.every((item) => /local dongle device was not found/.test(item.reason)));
+  // The cloud "did not find" report is not polluted by the local integration being absent.
+  assert.deepEqual([...discovery.unresolved], []);
+
+  const dashboard = buildDashboard(discovery);
+  const paths = dashboard.views.map((view) => view.path);
+  assert.deepEqual(
+    paths,
+    ["live", "energy", "solar", "battery", "cells", "grid", "performance", "system", "settings", "station"],
+    "the Local Inverter view drops but the cloud page and the Battery Cells explainer stay",
+  );
+
+  const cells = stableString(dashboard.views.find((view) => view.path === "cells"));
+  assert.ok(cells.includes("Cloud and local, side by side"));
+  assert.ok(cells.includes("Local dongle: not detected"));
+
+  const references = collectEntityReferences(dashboard);
+  assert.ok(![...references].some((entityId) => entityId.startsWith("sensor.eg4_local_")), "no local entity is referenced when the dongle is absent");
+  assert.ok(!stableString(dashboard).includes("undefined"));
+  validateDashboard(dashboard, data.states);
+});
+
+test("provisional local BMS fields are labelled provisional and no battery-temperature claim is made", () => {
+  const discovery = discoverEg4(fixture());
+  const dashboard = buildDashboard(discovery);
+  const labels = collectEntityLabels(dashboard);
+  const provisionalKeys = Object.entries(localContract)
+    .filter(([, spec]) => spec[2]?.provisional)
+    .map(([key]) => key);
+  assert.ok(provisionalKeys.length >= 7, "the contract carries several provisional local fields");
+  for (const key of provisionalKeys) {
+    const entityId = discovery.local.entities[key];
+    const named = labels.filter((label) => label.entity === entityId && label.name);
+    assert.ok(named.length > 0, `${key} must be named on some card`);
+    assert.ok(named.some((label) => /provisional/i.test(label.name)), `${key} must be labelled provisional`);
+  }
+  // The untrustworthy inverter-side probe (reg67) is not in the contract, and nothing on
+  // the page asserts a battery temperature.
+  assert.equal(discovery.local.entities.batteryTemp, undefined);
+  assert.doesNotMatch(stableString(dashboard), /battery temperature/i);
+});
+
+test("every dashboard LOCAL_ENTITIES original name is published by the eg4_local integration", () => {
+  // Cross-contract guard. The dashboard resolves each local entity by its original_name,
+  // which — with the integration's _attr_has_entity_name=True — equals the SensorSpec
+  // `name` string in custom_components/eg4_local/entity_descriptions.py. If the sibling
+  // integration renames or drops a spec the dashboard wants, that field silently fails to
+  // resolve on a live system (exactly the drift this guard exists to catch). We assert the
+  // set of dashboard original names is a SUBSET of the integration's published names, so
+  // the integration may carry extras (e.g. reg67 probe) but must never be missing one the
+  // dashboard depends on. Comparison is normalized (trim + lowercase) to mirror the
+  // resolver in discovery.mjs, which matches on normalize(original_name).
+  const specPath = join(
+    dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "custom_components",
+    "eg4_local",
+    "entity_descriptions.py",
+  );
+  const source = readFileSync(specPath, "utf8");
+  const norm = (value) => String(value).trim().toLowerCase();
+
+  // Capture the second string literal of every SensorSpec("<key>", "<name>", ...) call —
+  // that second literal is the entity name the integration publishes.
+  const integrationNames = new Set();
+  const specPattern = /SensorSpec\(\s*"(?:[^"\\]|\\.)*"\s*,\s*"((?:[^"\\]|\\.)*)"/g;
+  for (let match; (match = specPattern.exec(source)); ) {
+    integrationNames.add(norm(match[1]));
+  }
+  assert.ok(
+    integrationNames.size >= 40,
+    `expected to parse the integration's SensorSpec names, found only ${integrationNames.size} — the regex or file path is wrong`,
+  );
+
+  const dashboardNames = Object.values(localContract).map(([, originalName]) => originalName);
+  const missing = dashboardNames.filter((originalName) => !integrationNames.has(norm(originalName)));
+  assert.deepEqual(
+    missing,
+    [],
+    `these dashboard LOCAL_ENTITIES original names have no matching eg4_local SensorSpec name (the integration would not publish them, so the dashboard cannot resolve them): ${missing.join(", ")}`,
+  );
+});
+
 test("dashboard validation rejects missing entities and mutating actions", () => {
   const data = fixture();
   const discovery = discoverEg4(data);
@@ -447,7 +586,9 @@ test("dashboard validation rejects missing entities and mutating actions", () =>
 });
 
 test("validateDashboard admits an inert control tile and rejects every other shape", () => {
-  const data = fixture();
+  // Cloud-only, so the reference counts below are exactly the 137 cloud entities plus the
+  // one extra control this test injects — the local sensors are exercised elsewhere.
+  const data = fixture({ local: false });
   const discovery = discoverEg4(data);
   // A control entity that is not part of the contract, so each case below is the only
   // thing under test rather than a variation on the 39 tiles the page already carries.
