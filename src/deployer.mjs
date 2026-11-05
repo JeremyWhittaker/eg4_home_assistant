@@ -346,9 +346,13 @@ export function verifyEnergyPreferences(preferences, entities) {
   ]);
   const errors = [];
   for (const [type, expected] of required) {
-    const source = sources.find((candidate) => candidate.type === type);
+    const candidates = sources.filter((candidate) => candidate.type === type);
+    const source = candidates.find((candidate) => {
+      const configured = new Set([candidate.stat_energy_from, candidate.stat_energy_to].filter(Boolean));
+      return expected.every((entityId) => configured.has(entityId));
+    });
     if (!source) {
-      errors.push(`missing ${type} source`);
+      errors.push(candidates.length ? `${type} source does not reference the selected EG4 counters` : `missing ${type} source`);
       continue;
     }
     const configured = new Set([source.stat_energy_from, source.stat_energy_to].filter(Boolean));

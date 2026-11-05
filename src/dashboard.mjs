@@ -255,7 +255,7 @@ One or more live readings are unavailable. Values below are left unavailable—n
 {% else %}
 ## ☀️ Solar system online
 {% endif %}
-Producing **{{ (pv / 1000) | round(1) }} kW** with **{{ (load / 1000) | round(1) }} kW** on EG4's metered AC balance. This is an equipment reading, not the whole-property load; use **Home Energy** for the Enphase-corrected total.
+Producing **{{ (pv / 1000) | round(1) }} kW** with **{{ (load / 1000) | round(1) }} kW** on EG4's calculated AC-bus balance. This is an equipment reading, not the whole-property load; use **Home Energy** for the Enphase-corrected total.
 {% if exported > 50 %}Exporting **{{ (exported / 1000) | round(1) }} kW** to the grid.{% elif imported > 50 %}Importing **{{ (imported / 1000) | round(1) }} kW** from the grid.{% else %}Grid exchange is effectively neutral.{% endif %}
 Battery is **{{ soc | round(0) }}%** and {% if battery > 50 %}charging at **{{ (battery / 1000) | round(1) }} kW**{% elif battery < -50 %}discharging at **{{ ((battery | abs) / 1000) | round(1) }} kW**{% else %}standing by{% endif %}. · **Mode:** {{ state_translated('${e.operatingState}') }}
 {% endif %}`;
@@ -266,7 +266,7 @@ Battery is **{{ soc | round(0) }}%** and {% if battery > 50 %}charging at **{{ (
 function missingTelemetryCard(e) {
   const rows = entityRows(e, [
     ["pvPower", "Solar production"],
-    ["loadPower", "EG4 metered load"],
+    ["loadPower", "EG4 calculated load"],
     ["gridImportPower", "Grid import"],
     ["gridExportPower", "Grid export"],
     ["batteryPower", "Battery power"],
@@ -433,32 +433,61 @@ function disabledEntitiesNote() {
 // simply whichever integration is enabled, so there is no runtime switch to flip. The last
 // line reports whether the local dongle is currently detected, which is how a cloud-only
 // installation learns what it is missing and how to get it.
+function localReportChecks(entityExpression) {
+  return `{% set report = states[${entityExpression}] if states[${entityExpression}] is defined else none %}
+{% set reported = as_timestamp(report['last_reported'] if report is not none and report['last_reported'] is defined else report['last_updated'] if report is not none else none, none) %}
+{% set age = as_timestamp(now()) - reported if reported is number else -1 %}
+{% set cached = state_attr(${entityExpression}, 'stale') in [true, 'true', 'on', 1] %}
+{% set fresh = is_number(states(${entityExpression})) and not cached and reported is number and 0 <= age <= 300 %}`;
+}
+
+function localTelemetryStatus(discovery) {
+  const local = discovery.local;
+  if (!local?.installed && !local?.available) {
+    return "**Local dongle integration is not installed.** Local readings are unavailable; cloud equipment readings are separate.";
+  }
+  const entities = ["localSoc", "inverterPower", "gridVoltage", "cellVoltageDelta"]
+    .map((key) => local.entities?.[key]).filter(Boolean);
+  if (!entities.length) return "**Local integration installed; no reporting sensors were discovered.** Check the integration's diagnostics.";
+  return `{% set Summary = namespace(fresh=0, cached=0) %}
+{% for entity in ${JSON.stringify(entities)} %}
+${localReportChecks("entity")}
+{% if fresh %}{% set Summary.fresh = Summary.fresh + 1 %}{% endif %}
+{% if cached %}{% set Summary.cached = Summary.cached + 1 %}{% endif %}
+{% endfor %}
+{% if Summary.fresh == ${entities.length} %}
+**Local telemetry is reporting.** ${entities.length} key readings have numeric HA reports from the last five minutes.
+{% elif Summary.fresh > 0 %}
+**Local telemetry is partial:** {{ Summary.fresh }} of ${entities.length} key readings have recent numeric reports. Other readings are unavailable or stale.
+{% else %}
+**Local telemetry is unavailable or stale.** An installed integration does not establish a current dongle connection.
+{% endif %}
+{% if Summary.cached > 0 %}The integration marks {{ Summary.cached }} key readings as cached; they are not current measurements.{% endif %}
+
+Freshness uses HA report time and the integration's stale flag. It does not establish the sample age of every field retained from a partial poll.`;
+}
+
 function localSourceNote(discovery) {
-  const present = discovery.local?.available;
-  return markdown([
-    "### Cloud and local, side by side",
-    "",
-    "This inverter can report through two independent Home Assistant integrations, and this dashboard shows whichever are installed:",
-    "",
-    "- **EG4 cloud** (`eg4_web_monitor`) — the account and plant view behind the Live, Energy, Solar, Battery, Grid, Trends, Equipment, Configuration, and Station pages. It aggregates the two battery modules into one bank and never returns per-cell detail.",
-    "- **Local dongle** (`eg4_local`) — a direct read of the WiFi dongle on your own network. It surfaces the data the cloud hides: per-cell voltage max, min, and the max−min **delta** that reads pack balance and health, plus pack capacity, module count, and provisional cell temperatures and cycle count.",
-    "",
-    "Either can run on its own. There is no switch to flip on this page — Home Assistant's data source is whichever integration is enabled, and the page renders what is present. You choose cloud credentials, a local dongle IP, or both in the integrations' own setup.",
-    "",
-    present
-      ? "**Local dongle: connected.** The per-cell cards below are live."
-      : "**Local dongle: not detected.** The per-cell cards stay empty until the `eg4_local` integration is installed and pointed at the dongle. The rest of this dashboard keeps running from the cloud integration.",
-  ].join("\n"));
+  return markdown(`**Two data sources**
+
+**EG4 cloud** supplies the inverter, bank, settings, and station views. **Local dongle** supplies direct telemetry and a BMS summary of reported cell-voltage extremes, capacity, and module count.
+
+${localTelemetryStatus(discovery)}
+
+Cell max/min/delta summarize the battery bank; they are not a table of individual cell voltages.`);
 }
 
 function localProvisionalNote() {
-  return markdown([
-    "### About the provisional readings",
-    "",
-    "Fields tagged **(provisional)** are read correctly off the dongle, but their scale or meaning is reasoned from the LuxPower/EG4 register family rather than confirmed independently on this unit — the cell temperatures, cycle count, pack current, state of health, and remaining capacity. They are shown because hiding them would be worse, never as confirmed fact.",
-    "",
-    "The confirmed per-cell figures are the cell voltage max, min, and delta, the pack capacity, and the module count. The inverter's own \"battery probe\" register is not shown at all: the decoder demoted it as untrustworthy, and the reading that reflects the modules is the BMS cell temperature here.",
-  ].join("\n"));
+  return markdown("Fields marked **provisional** have an unverified scale or interpretation on this installation. Use them as diagnostic estimates until checked independently. The cell-voltage extremes and delta are reported separately from these provisional fields.");
+}
+
+function freshLocalReading(entities, key, title, unit) {
+  if (!has(entities, key)) return null;
+  const entity = JSON.stringify(entities[key]);
+  return markdown(`${localReportChecks(entity)}
+**${title}:** {% if fresh and state_attr(${entity}, 'unit_of_measurement') == '${unit}' %}{{ states(${entity}) | float | round(1) }} ${unit}{% else %}Unavailable or stale{% endif %}
+
+{% if cached %}The integration retained a previous value; it is not shown as a current reading.{% elif not fresh %}Waiting for a numeric report no more than five minutes old.{% endif %}`);
 }
 
 // Resolved local entities that are currently reporting nothing, mirroring the cloud
@@ -495,7 +524,7 @@ function localMissingTelemetryCard(le) {
 // sections drop out and only the explainer remains — the page still builds.
 function batteryCellsView(discovery) {
   const le = discovery.local?.entities ?? {};
-  const live = Boolean(discovery.local?.available);
+  const hasLocalEntities = Boolean(discovery.local?.hasEntities ?? discovery.local?.available);
   return view({
     title: "Battery Cells",
     path: "cells",
@@ -508,39 +537,24 @@ function batteryCellsView(discovery) {
     ]),
     sections: [
       gridSection([
-        heading("Per-cell battery detail (local dongle)", "mdi:battery-heart-variant"),
+        heading("Battery cell summary · local dongle", "mdi:battery-heart-variant"),
         localSourceNote(discovery),
         localMissingTelemetryCard(le),
       ]),
       gridSection([
         heading("Cell balance", "mdi:battery-sync"),
-        has(le, "cellVoltageDelta")
-          ? {
-            type: "gauge",
-            entity: le.cellVoltageDelta,
-            name: "Cell voltage delta (max − min)",
-            unit: "mV",
-            min: 0,
-            max: 200,
-            needle: true,
-            // Higher delta is worse: a tight pack sits low and green, a drifting or
-            // failing one climbs into yellow and red. Thresholds are typical LiFePO4
-            // balance bands, shown as guidance rather than a calibrated alarm.
-            severity: { green: 0, yellow: 50, red: 100 },
-            grid_options: { columns: "full", rows: 3 },
-          }
-          : null,
+        freshLocalReading(le, "cellVoltageDelta", "Cell voltage difference", "mV"),
         ...tiles(le, [
           ["cellVoltageMax", "Max cell voltage", "mdi:battery-high"],
           ["cellVoltageMin", "Min cell voltage", "mdi:battery-low"],
         ]),
-        live
-          ? markdown("**Delta is the headline.** It is the highest cell's voltage minus the lowest across the whole pack. A small delta means the cells are balanced; a delta that grows over time — especially near full or empty — is the earliest sign of a weak cell or a balancing problem, and it is exactly what the cloud API does not report.")
+        hasLocalEntities
+          ? markdown("Cell delta is the difference between the highest and lowest reported cell voltage. Compare its trend with state of charge, temperature, and load; one reading alone does not diagnose a weak cell.")
           : null,
       ]),
       gridSection([
         heading("Cell voltages and capacity", "mdi:battery-heart-variant"),
-        entitiesCard("Confirmed per-cell", entityRows(le, [
+        entitiesCard("BMS voltage extremes and capacity", entityRows(le, [
           ["cellVoltageMax", "Max cell voltage", "mdi:battery-high"],
           ["cellVoltageMin", "Min cell voltage", "mdi:battery-low"],
           ["cellVoltageDelta", "Cell voltage delta (max − min)", "mdi:battery-sync"],
@@ -550,7 +564,7 @@ function batteryCellsView(discovery) {
       ]),
       gridSection([
         heading("Provisional BMS detail", "mdi:alert-outline"),
-        live ? localProvisionalNote() : null,
+        hasLocalEntities ? localProvisionalNote() : null,
         entitiesCard("Provisional readings", entityRows(le, [
           ["cellTempMax", "Max cell temperature (provisional)", "mdi:thermometer-high"],
           ["cellTempMin", "Min cell temperature (provisional)", "mdi:thermometer-low"],
@@ -578,7 +592,7 @@ function batteryCellsView(discovery) {
 // so with no local integration the whole view drops rather than showing an empty shell.
 function localInverterView(discovery) {
   const le = discovery.local?.entities ?? {};
-  if (!discovery.local?.available) return null;
+  if (!discovery.local?.installed && !discovery.local?.available) return null;
   return view({
     title: "Local Inverter",
     path: "local",
@@ -591,7 +605,8 @@ function localInverterView(discovery) {
     sections: [
       gridSection([
         heading("Local dongle (direct Modbus)", "mdi:lan-connect"),
-        markdown("These readings come straight from the WiFi dongle on your network over Modbus, independent of the EG4 cloud. On this firmware the dongle exposes live telemetry but not the hold/settings registers, so this page reports and never controls — the same read-only rule as the rest of the dashboard."),
+        markdown(localTelemetryStatus(discovery)),
+        markdown("This page reads local dongle telemetry. Inverter settings are shown separately on Configuration; changing a displayed value requires opening the device settings."),
       ]),
       gridSection([
         heading("Solar strings", "mdi:solar-panel-large"),
@@ -613,24 +628,13 @@ function localInverterView(discovery) {
       ]),
       gridSection([
         heading("Battery", "mdi:home-battery"),
-        has(le, "localSoc")
-          ? {
-            type: "gauge",
-            entity: le.localSoc,
-            name: "State of charge",
-            min: 0,
-            max: 100,
-            needle: true,
-            severity: { red: 0, yellow: 20, green: 50 },
-            grid_options: { columns: "full", rows: 3 },
-          }
-          : null,
+        freshLocalReading(le, "localSoc", "State of charge", "%"),
         ...tiles(le, [
           ["batteryVoltage", "Battery voltage", "mdi:sine-wave"],
           ["batteryChargePower", "Charge power", "mdi:battery-arrow-up"],
           ["batteryDischargePower", "Discharge power", "mdi:battery-arrow-down"],
         ]),
-        markdown("Per-cell voltage, delta, capacity, and the provisional cell temperatures live on the **Battery Cells** page — that is the detail the cloud cannot see."),
+        markdown("Cell-voltage extremes, delta, capacity, and provisional temperature summaries are on **Battery Cells**."),
       ]),
       gridSection([
         heading("Grid & AC", "mdi:transmission-tower"),
@@ -691,7 +695,7 @@ export function buildDashboard(discovery) {
       icon: "mdi:solar-power",
       badges: badges(e, [
         ["pvPower", "Solar", "mdi:solar-power"],
-        ["loadPower", "Home", "mdi:home-lightning-bolt"],
+        ["loadPower", "Calculated load", "mdi:home-lightning-bolt"],
         ["batteryBankSoc", "Battery", "mdi:home-battery"],
         ["gridPower", "Grid", "mdi:transmission-tower"],
         ["operatingState", "Mode", "mdi:state-machine"],
@@ -704,7 +708,7 @@ export function buildDashboard(discovery) {
           missingTelemetryCard(e),
           distribution("Current power readings", [
             series(e, "pvPower", "Solar production", "#f9a825"),
-            series(e, "loadPower", "EG4 metered load", "#1e88e5"),
+            series(e, "loadPower", "EG4 calculated load", "#1e88e5"),
             series(e, "gridImportPower", "Grid import", "#7e57c2"),
             series(e, "gridExportPower", "Grid export", "#8e24aa"),
             series(e, "batteryPower", "Battery (+ charge / − discharge)", "#00897b"),
@@ -712,7 +716,7 @@ export function buildDashboard(discovery) {
           heading("Primary power", "mdi:flash", "subtitle"),
           ...tiles(e, [
             ["pvPower", "Solar production", "mdi:solar-power"],
-            ["loadPower", "EG4 metered load", "mdi:meter-electric-outline"],
+            ["loadPower", "EG4 calculated load", "mdi:meter-electric-outline"],
             ["gridImportPower", "Grid import", "mdi:transmission-tower-import"],
             ["gridExportPower", "Grid export", "mdi:transmission-tower-export"],
           ]),
@@ -738,14 +742,14 @@ export function buildDashboard(discovery) {
           heading("Today", "mdi:calendar-today", "subtitle"),
           ...tiles(e, [
             ["yieldToday", "Solar generated", "mdi:white-balance-sunny"],
-            ["consumptionToday", "EG4 metered consumption", "mdi:meter-electric-outline"],
+            ["consumptionToday", "EG4 calculated consumption", "mdi:meter-electric-outline"],
             ["gridImportToday", "Imported", "mdi:transmission-tower-import"],
             ["gridExportToday", "Exported", "mdi:transmission-tower-export"],
           ]),
           heading("Last 24 hours", "mdi:chart-areaspline", "subtitle"),
           historyGraph("Power history", 24, entityRows(e, [
             ["pvPower", "Solar"],
-            ["loadPower", "EG4 metered load"],
+            ["loadPower", "EG4 calculated load"],
             ["gridImportPower", "Grid import"],
             ["gridExportPower", "Grid export"],
             ["batteryPower", "Battery (+ charge / − discharge)"],
@@ -760,7 +764,9 @@ export function buildDashboard(discovery) {
       icon: "mdi:chart-sankey-variant",
       sections: [
         gridSection([
-          heading("Energy balance", "mdi:chart-donut"),
+          heading("Configured Energy sources", "mdi:chart-donut"),
+          markdown("These charts use Home Assistant's **global Energy configuration**. The separate date selector does not create an EG4-only set of meters. For this property, coverage requires both the EG4 array and the separate Enphase array, with Tigo excluded because it overlaps EG4. Until all sources and counter histories are verified, treat distribution and self-sufficiency percentages as incomplete accounting. Check the sources below and use Home Energy for the live combined estimate."),
+          { type: "energy-sources-table", collection_key: ENERGY_COLLECTION, grid_options: { columns: "full" } },
           { type: "energy-date-selection", collection_key: ENERGY_COLLECTION, grid_options: { columns: "full" } },
           { type: "energy-distribution", title: "Where energy flowed", collection_key: ENERGY_COLLECTION, link_dashboard: false, grid_options: { columns: "full", rows: 5 } },
           { type: "energy-grid-balance", collection_key: ENERGY_COLLECTION, grid_options: { columns: 6, rows: 3 } },
@@ -769,11 +775,11 @@ export function buildDashboard(discovery) {
         ]),
         gridSection([
           heading("Production and use", "mdi:chart-areaspline"),
-          { type: "energy-usage-graph", title: "Home energy", collection_key: ENERGY_COLLECTION, show_legend: false, grid_options: { columns: "full", rows: 6 } },
+          { type: "energy-usage-graph", title: "Configured energy use", collection_key: ENERGY_COLLECTION, show_legend: false, grid_options: { columns: "full", rows: 6 } },
           { type: "energy-solar-graph", title: "Solar production", collection_key: ENERGY_COLLECTION, grid_options: { columns: "full", rows: 6 } },
           historyGraph("Today's power detail", 24, entityRows(e, [
             ["pvPower", "Solar"],
-            ["loadPower", "EG4 metered load"],
+            ["loadPower", "EG4 calculated load"],
             ["gridImportPower", "Grid import"],
             ["gridExportPower", "Grid export"],
             ["batteryPower", "Battery (+ charge / − discharge)"],
@@ -787,7 +793,7 @@ export function buildDashboard(discovery) {
           heading("Lifetime totals", "mdi:counter"),
           entitiesCard("Lifetime energy", entityRows(e, [
             ["yieldLifetime", "Solar generated", "mdi:solar-power"],
-            ["consumptionLifetime", "EG4 metered consumption", "mdi:meter-electric-outline"],
+            ["consumptionLifetime", "EG4 calculated consumption", "mdi:meter-electric-outline"],
             ["loadEnergyLifetime", "Load energy", "mdi:home-lightning-bolt"],
             ["gridImportLifetime", "Grid imported", "mdi:transmission-tower-import"],
             ["gridExportLifetime", "Grid exported", "mdi:transmission-tower-export"],
@@ -984,14 +990,14 @@ export function buildDashboard(discovery) {
             ["acVoltage", "AC voltage", "mdi:sine-wave"],
             ["outputPower", "Output power", "mdi:transmission-tower-export"],
             ["totalLoadPower", "Total load power", "mdi:home-lightning-bolt"],
-            ["loadPower", "EG4 metered load", "mdi:meter-electric-outline"],
+            ["loadPower", "EG4 calculated load", "mdi:meter-electric-outline"],
             ["acCouplePower", "AC couple power", "mdi:flash-outline"],
           ])),
           entitiesCard("Load and consumption energy", entityRows(e, [
             ["loadEnergyToday", "Load energy today", "mdi:home-lightning-bolt"],
             ["loadEnergyLifetime", "Load energy lifetime", "mdi:counter"],
-            ["consumptionToday", "EG4 metered consumption today", "mdi:meter-electric-outline"],
-            ["consumptionLifetime", "EG4 metered consumption lifetime", "mdi:counter"],
+            ["consumptionToday", "EG4 calculated consumption today", "mdi:meter-electric-outline"],
+            ["consumptionLifetime", "EG4 calculated consumption lifetime", "mdi:counter"],
           ])),
           markdown("EG4's **Consumption Power** and its energy counters are derived from this inverter's own AC bus. They are not whole-property load: the separate Enphase array is not accounted for. Use the **Home Energy** dashboard for the corrected whole-home figure."),
         ]),
@@ -1038,14 +1044,14 @@ export function buildDashboard(discovery) {
           heading("Power and energy", "mdi:flash"),
           historyGraph("Power · 48 hours", 48, entityRows(e, [
             ["pvPower", "Solar"],
-            ["loadPower", "EG4 metered load"],
+            ["loadPower", "EG4 calculated load"],
             ["gridImportPower", "Grid import"],
             ["gridExportPower", "Grid export"],
             ["batteryPower", "Battery"],
           ]), 7),
           statisticsGraph("Daily energy · 30 days", entityRows(e, [
             ["yieldLifetime", "Solar generated"],
-            ["consumptionLifetime", "EG4 metered consumption"],
+            ["consumptionLifetime", "EG4 calculated consumption"],
             ["gridImportLifetime", "Grid import"],
             ["gridExportLifetime", "Grid export"],
           ])),
@@ -1167,7 +1173,7 @@ export function buildDashboard(discovery) {
             ["apiRequestRate", "Requests per hour"],
             ["apiPeakRequestRate", "Peak requests per minute"],
           ]), 5),
-          markdown("Every reading on this dashboard arrives over the EG4 cloud API, which is rate limited. These counters are the early warning that polling is too aggressive: a rising peak rate shows up here before readings start going unavailable elsewhere."),
+          markdown("These counters describe the rate-limited EG4 cloud API. Local dongle telemetry is a separate source and does not use this cloud request budget."),
         ]),
       ],
     }),

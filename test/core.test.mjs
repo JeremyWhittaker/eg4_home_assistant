@@ -459,16 +459,17 @@ test("the local dongle contract resolves and fills the Battery Cells and Local I
   assert.ok(paths.includes("local"), "the Local Inverter view is present");
 
   const cells = dashboard.views.find((view) => view.path === "cells");
-  // The headline is a gauge bound to the cell voltage delta.
-  const gauge = collectCards(cells).find((card) => card.type === "gauge");
-  assert.ok(gauge, "the cells view must carry a gauge");
-  assert.equal(gauge.entity, discovery.local.entities.cellVoltageDelta);
+  // Missing local values must render as text, never as an erroring gauge.
+  assert.equal(collectCards(cells).some((card) => card.type === "gauge"), false);
+  assert.ok(collectEntityReferences(cells).has(discovery.local.entities.cellVoltageDelta));
 
   const cellsText = stableString(cells);
-  assert.ok(cellsText.includes("Cloud and local, side by side"), "the cloud-vs-local header must be present");
+  assert.ok(cellsText.includes("Two data sources"), "the cloud-vs-local header must be present");
   assert.ok(cellsText.includes("eg4_local"), "the local integration is named");
-  assert.ok(cellsText.includes("the data the cloud hides"), "the page frames the local data as what the cloud hides");
-  assert.ok(cellsText.includes("Local dongle: connected"));
+  assert.ok(cellsText.includes("Local telemetry is unavailable or stale"));
+  assert.ok(cellsText.includes("last_reported"));
+  assert.ok(cellsText.includes("0 <= age <= 300"));
+  assert.doesNotMatch(cellsText, /Local dongle: connected|per-cell cards below are live/);
 
   // The whole thing validates against live state, local references included.
   const result = validateDashboard(dashboard, data.states);
@@ -496,8 +497,8 @@ test("the dashboard builds cloud-only when the local dongle is absent", () => {
   );
 
   const cells = stableString(dashboard.views.find((view) => view.path === "cells"));
-  assert.ok(cells.includes("Cloud and local, side by side"));
-  assert.ok(cells.includes("Local dongle: not detected"));
+  assert.ok(cells.includes("Two data sources"));
+  assert.ok(cells.includes("Local dongle integration is not installed"));
 
   const references = collectEntityReferences(dashboard);
   assert.ok(![...references].some((entityId) => entityId.startsWith("sensor.eg4_local_")), "no local entity is referenced when the dongle is absent");
@@ -646,8 +647,8 @@ test("validateDashboard admits an inert control tile and rejects every other sha
 test("dashboard templates are discovered and rendered through Home Assistant", async () => {
   const dashboard = buildDashboard(discoverEg4(fixture()));
   const templates = collectDashboardTemplates(dashboard);
-  assert.equal(templates.length, 1);
-  assert.ok(templates[0].includes("soc_raw | float"));
+  assert.ok(templates.length >= 5);
+  assert.ok(templates.some((template) => template.includes("soc_raw | float")));
   const calls = [];
   const client = {
     async request(path, options) {
@@ -655,10 +656,50 @@ test("dashboard templates are discovered and rendered through Home Assistant", a
       return "rendered";
     },
   };
-  assert.deepEqual(await validateDashboardTemplates(client, dashboard), { templateCount: 1 });
+  assert.deepEqual(await validateDashboardTemplates(client, dashboard), { templateCount: templates.length });
   assert.equal(calls[0].path, "/api/template");
   assert.equal(calls[0].options.method, "POST");
   assert.equal(calls[0].options.responseType, "text");
+});
+
+test("registered but unavailable local telemetry keeps routes and never becomes a live claim", () => {
+  const data = fixture();
+  for (const state of data.states.filter((item) => item.entity_id.startsWith("sensor.eg4_local_"))) {
+    state.state = "unavailable";
+  }
+  const discovered = discoverEg4(data);
+  assert.equal(discovered.local.installed, true);
+  assert.equal(discovered.local.hasEntities, true);
+  const dashboard = buildDashboard(discovered);
+  for (const path of ["cells", "local"]) {
+    const page = dashboard.views.find((item) => item.path === path);
+    assert.ok(page, "an existing local bookmark must remain usable during an outage");
+    assert.equal(collectCards(page).some((card) => card.type === "gauge"), false);
+    assert.match(stableString(page), /unavailable or stale/);
+  }
+  validateDashboard(dashboard, data.states);
+});
+
+test("local integration with no reporting sensor states retains its explanatory route", () => {
+  const data = fixture();
+  data.states = data.states.filter((item) => !item.entity_id.startsWith("sensor.eg4_local_"));
+  const discovered = discoverEg4(data);
+  assert.equal(discovered.local.installed, true);
+  assert.equal(discovered.local.hasEntities, false);
+  const page = buildDashboard(discovered).views.find((item) => item.path === "local");
+  assert.ok(page);
+  assert.match(stableString(page), /no reporting sensors were discovered/);
+});
+
+test("equipment copy separates calculated consumption from shared Energy accounting", () => {
+  const dashboard = buildDashboard(discoverEg4(fixture()));
+  const text = stableString(dashboard);
+  assert.doesNotMatch(text, /EG4 metered|metered AC balance|Every reading on this dashboard|Confirmed per-cell/);
+  assert.match(text, /EG4 calculated consumption/);
+  const energy = dashboard.views.find((page) => page.path === "energy");
+  assert.match(stableString(energy), /global Energy configuration/);
+  assert.match(stableString(energy), /separate Enphase array/);
+  assert.ok(collectCards(energy).some((card) => card.type === "energy-sources-table"));
 });
 
 test("Energy preferences must use the selected EG4 lifetime counters", () => {
@@ -672,7 +713,9 @@ test("Energy preferences must use the selected EG4 lifetime counters", () => {
     ],
   };
   assert.deepEqual(verifyEnergyPreferences(preferences, e).sourceTypes, ["grid", "solar", "battery"]);
-  preferences.energy_sources.pop();
+  preferences.energy_sources.unshift({ type: "solar", stat_energy_from: "sensor.other_array_energy" });
+  assert.deepEqual(verifyEnergyPreferences(preferences, e).sourceTypes, ["grid", "solar", "battery"]);
+  preferences.energy_sources = preferences.energy_sources.filter((source) => source.type !== "battery");
   assert.throws(() => verifyEnergyPreferences(preferences, e), /missing battery source/);
 });
 

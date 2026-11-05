@@ -490,7 +490,10 @@ export function discoverEg4({ devices, entities, states, selector = "" }) {
       entities: Object.freeze(localResolved.entities),
       catalog: Object.freeze(localResolved.catalog),
       unresolved: Object.freeze(localResolved.unresolved),
-      // True once the local device exists and at least one of its sensors is live.
+      installed: localDevice !== null,
+      hasEntities: Object.keys(localResolved.entities).length > 0,
+      // Compatibility alias for discovered capability, never connection health.
+      // Current freshness is evaluated in HA templates after deployment.
       available: Object.keys(localResolved.entities).length > 0,
     },
     entities: Object.freeze(entityMap),
