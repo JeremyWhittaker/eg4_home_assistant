@@ -1,6 +1,26 @@
 # EG4 and Home Assistant analysis
 
-Audit date: 2026-08-28 (America/Phoenix)
+Initial audit: 2026-08-28 (America/Phoenix). Current acceptance is recorded below; the older
+audit and design sections retain their dates and do not prove current equipment health.
+
+## November deployment and copy review
+
+The deployed `2751509` dashboard was independently checked on November 4, 2026 at 7:25 p.m.
+Arizona time. The actual native browser matrix passed **all 11 routes**, desktop/mobile and
+light/dark: **44 cases, 164 full-scroll screenshots**. This supersedes the older four-route
+rendering coverage. It includes unavailable local telemetry and does not prove live dongle
+measurements or individual cell coverage.
+
+The November 5 source correction replaces repeated local warning paragraphs with one short
+status linked to **Equipment → Local diagnostics** at `/eg4-energy/system`. Detailed freshness,
+cached-data and integration explanations remain there. Local tiles omit HA's relative update
+age because that age can describe a status change rather than an outage start. Numeric values,
+measurement units, source identities, stale/future-report rejection and five-minute freshness
+checks remain unchanged. Battery Cells still shows bank-level voltage extremes, not individual
+cell voltages; provisional fields remain labelled.
+
+This new copy still needs fresh deployed desktop/mobile checks of Battery Cells, Local Inverter
+and Equipment. The November 4 screenshots validate the prior deployed copy only.
 
 ## Access path
 
@@ -74,7 +94,7 @@ Solar uses amber, home load uses the active Home Assistant theme, battery uses i
 
 That four-view structure was superseded on 2026-09-15. The color and labeling rules below it still hold; the view list is now the nine described under "Full-inventory revamp".
 
-## Live deployment and verification
+## Original four-view deployment and verification (August 28)
 
 The `eg4-energy` storage dashboard was created and then polished transactionally on 2026-08-28. Each write produced a mode-0600 rollback backup, round-tripped the saved metadata/configuration, and a final preflight reported `action=unchanged`.
 
@@ -212,11 +232,29 @@ The inverter-side "battery temp" register (reg67) is deliberately **not** in thi
 
 Every field the `eg4_local_monitor` decoder marks provisional carries `provisional: true` in the contract, and the dashboard labels it **(provisional)** in the card name — the cell temperatures, cycle count, pack current, state of health, remaining capacity, and inverter state. The confirmed per-cell figures — cell voltage max, min, delta, pack capacity, module count — carry no such tag. This mirrors the source project's confidence discipline exactly: a value that was read correctly but whose scale or meaning is reasoned rather than cross-confirmed is shown because hiding it would be worse, but is never presented as fact.
 
-### Two new views, and graceful degradation
+### Current local views and unavailable data
 
 The addition ships two Sections views:
 
-- **Battery Cells** (`/cells`) — the star. It leads with a markdown header that explains, in plain language, that the page shows two independent integrations (`eg4_web_monitor` and `eg4_local`), that the local dongle exposes the per-cell detail the cloud does not, and that either can run alone — Home Assistant's data source is simply whichever integration is enabled, so there is no runtime switch to flip. The cell-balance section is built around a gauge on the cell voltage **delta**, banded green/yellow/red on typical LiFePO4 balance thresholds, because the delta is the single most useful health number the cloud cannot show. Below it are the confirmed cell voltages and capacity, a clearly-flagged provisional section, and a 24-hour cell trend.
+- **Battery Cells** (`/cells`) — bank-level voltage maximum, minimum and difference, capacity, module count, provisional readings and a 24-hour trend. A freshness-checked text readout shows the voltage difference or **Unavailable**; it does not use a gauge that fails on unavailable input. The short source status links to Equipment diagnostics.
 - **Local Inverter** (`/local`) — the standalone local view: PV strings, battery, grid & AC, the inverter's own temperatures, energy today and lifetime, and status/identity, all read from the dongle. It exists so a local-only installation has a complete inverter panel of its own.
 
-Graceful degradation is by construction and mirrors the existing missing-telemetry pattern. When the `eg4_local` integration is not installed, the local device does not exist, so every local field resolves as unresolved with a reason, `discovery.local.available` is false, and no local entity id is referenced anywhere. The **Local Inverter** view has no unconditional card, so it drops out entirely. The **Battery Cells** view keeps only its header, which now reads "**Local dongle: not detected**" and tells the reader how to get the data — the page still builds, cloud-only, with the cloud-vs-local story intact. The local unresolved entries are tagged `source: "local"` so they never pollute the cloud "did not find" report; local absence is the expected state until the integration is installed, not an error. `discovery.local` is a separate namespace from the cloud `entities`/`catalog`/`unresolved`, so every count and guarantee the rest of the code asserts against the 137-entity cloud contract is untouched.
+When `eg4_local` is not installed, the Local Inverter route is omitted, Battery Cells keeps an
+unavailable-data status, and Equipment diagnostics explains the missing integration. No local
+entity is referenced. When it is installed but its readings are unavailable, both local routes
+remain present. Discovery capability is separate from current numeric reports. Local unresolved
+entries remain in the separate `discovery.local` namespace and do not become cloud discovery
+errors. The unavailable-fields list lives in Equipment diagnostics, alongside the detailed
+source explanation.
+
+## November 5 deployed-copy acceptance and local recovery
+
+The concise Local/Cells status and Equipment diagnostics were saved and read back exactly.
+Twelve desktop/mobile light/dark cases passed with 44 screenshots and zero browser errors.
+A subsequently shortened Battery summary title passed four fresh Cells cases / ten screenshots.
+Actual mobile Cells and desktop Local captures were inspected; numeric fields and controls remain unchanged.
+
+The Core restart also restored the local read path. All 59 sensor entities became numeric;
+a separate new-client input harvest returned 254/381 registers, with bank 254 missing. Its
+PV, 100% battery charge and cell-summary fields are fresh direct-read evidence. This does not
+prove all-bank coverage or independent calibration, and no local settings were written.

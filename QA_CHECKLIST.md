@@ -2,6 +2,30 @@
 
 Status values: `implemented`, `blocked`, `deferred`, or `not applicable`.
 
+## Current deployed acceptance and November 5 copy correction
+
+The November 4 deployed dashboard at `2751509` passed the independently checked native browser
+matrix: **11 routes × desktop/mobile × light/dark = 44 cases**, with **164 full-scroll
+screenshots**. Acceptance was recorded at 7:25 p.m. Arizona time. The result proves rendering
+with the observed states, including unavailable local telemetry; it does not prove a healthy
+dongle or physical cell measurements.
+
+| Gate | Status | Evidence |
+| --- | --- | --- |
+| All 11 deployed routes, both widths and themes | implemented | November 4 actual native browser matrix: 44 cases / 164 screenshots; supersedes the historical coverage gaps below |
+| Unavailable local data remains unavailable | implemented | Prior deployed matrix rendered the unavailable states; source checks retain numeric/freshness/unit guards and never substitute zero |
+| November 5 concise local status and Diagnostics destination | implemented | Source moves detailed local warnings to Equipment and keeps all routes, source references and inert controls |
+| Local relative status age does not imply outage duration | implemented | Local tiles show their state without relative update time; cloud tile timestamps remain unchanged |
+| New copy and diagnostics on the deployed target | implemented | November 5 exact save/readback and twelve desktop/mobile/light/dark cases across Cells, Local and Equipment: 44 screenshots, zero browser errors. Final shorter Cells title passed four further cases / ten screenshots; representative captures inspected |
+| Current key dongle reads | implemented | November 5 direct new-client input read returned 254 registers, including PV, charge and cell summary; all 59 HA entities numeric. This is device-reported telemetry, not independent cell calibration |
+| Complete local harvest | blocked | Direct read missed the third bank starting at 254; partial-poll retention means recent HA reports cannot prove every field has a fresh bank |
+| Standard checked-in QA runner alone covers every route | blocked | It still enumerates four routes; the completed full matrix used a separate read-only native harness selecting the actual deployed routes |
+
+## Historical four-view release acceptance (August 28, 2026)
+
+The tables below preserve their original dated evidence. Their counts and deferred/blocked
+statuses describe those releases; current November rendering acceptance is recorded above.
+
 | Gate | Status | Evidence |
 | --- | --- | --- |
 | Live EG4 entity/device inventory | implemented | `node deploy.mjs --check`: one 18KPV, linked battery bank, 60 referenced live entities |
@@ -33,7 +57,9 @@ The final browser report records five allowed external errors from globally load
 
 ## Full-inventory revamp gates (2026-09-15)
 
-The table above records the 2026-08-28 release and stays as its shipped evidence. The revamp that expands the panel from four views to nine, and from 60 displayed entities to all 137 the contract resolves — 98 telemetry entities on the telemetry views plus the 39 configuration entities as inert value tiles — adds the gates below. They are `deferred` until the rebuilt dashboard has been deployed and re-inspected in a browser; marking one `implemented` without that evidence would be false.
+This table preserves the September 15 design checkpoint, when the expanded views had not yet
+been deployed and inspected. Its deferred rendering gates are superseded by the November 4
+11-route acceptance above. Its older entity counts are not a fresh inventory.
 
 The nine routes are `/live`, `/energy`, `/solar`, `/battery`, `/grid`, `/performance`, `/system`, `/settings`, and `/station`.
 
@@ -66,7 +92,10 @@ The nine routes are `/live`, `/energy`, `/solar`, `/battery`, `/grid`, `/perform
 
 ## Local-dongle view gates (2026-09-15)
 
-These gates cover the two views added for the `eg4_local` integration — **Battery Cells** (`/cells`) and **Local Inverter** (`/local`) — that surface the per-cell BMS data the EG4 cloud does not expose. The offline gates are `implemented` now; every gate that needs a live `eg4_local` device or a browser is `deferred` until the integration is installed and the rebuilt dashboard is re-inspected, because marking one `implemented` without that evidence would be false.
+This table preserves the September 15 local-view design checkpoint. November 4 acceptance now
+covers both local routes with the observed unavailable readings. It does not resolve the older
+physical-measurement gates. The gauge and header described in the historical table were replaced
+by freshness-checked text and the source status described above.
 
 With the local integration present the routes become `/live`, `/energy`, `/solar`, `/battery`, `/cells`, `/local`, `/grid`, `/performance`, `/system`, `/settings`, `/station`. With it absent, `/local` drops and `/cells` remains as the cloud-vs-local explainer.
 

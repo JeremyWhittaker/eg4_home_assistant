@@ -17,7 +17,7 @@ Up to eleven responsive Sections views, every one of them read-only. Eight equip
 - **Solar** (`/solar`) — the PV arrays. Current contribution across the three strings, per-string power tiles, a telemetry card per string with its power, voltage, and current, today's and lifetime yield, a 24-hour per-string chart, and a 30-day daily-generation chart.
 - **Battery** (`/battery`) — the bank, plus the note explaining why there is only one of it. Bank state-of-charge gauge, bank power/voltage/current/charge-rate tiles, the five reported capacity figures with the module count and bank status, the three BMS permission sensors, the inverter's independent DC-terminal readings, today's and lifetime charge and discharge, a seven-day state-of-charge history, and a 30-day battery-energy chart. This view is the aggregate **bank** as the cloud reports it; the per-cell detail lives on **Battery Cells**.
 - **Battery Cells** (`/cells`) — a BMS summary from the local dongle: reported cell-voltage maximum, minimum, and difference, pack capacity, module count, and clearly marked provisional fields. It does not show individual cell voltages. A dynamic status checks numeric HA reports, the integration's stale flag, and report timestamps; an installed integration alone is not called connected. The main delta readout shows unavailable/stale text instead of a failing gauge.
-- **Local Inverter** (`/local`) — local PV, battery, grid/AC, energy, temperature, and status readings. The route stays present when a local integration is discovered, including while its telemetry is unavailable. SOC uses a freshness-checked text readout; raw source tiles retain their reported values and the header explains cached or partial data.
+- **Local Inverter** (`/local`) — local PV, battery, grid/AC, energy, temperature, and status readings. The route stays present when a local integration is discovered, including while its telemetry is unavailable. SOC uses a freshness-checked text readout; raw source tiles retain their reported values. A short status links to Equipment diagnostics for source and freshness details.
 - **Grid & AC** (`/grid`) — everything on the AC side. Net/import/export power and energy, grid voltage including the R/S/T legs, frequency, grid type, power factor and off-grid state, the AC bus and load counters, the internal conversion stage (rectifier power and the two DC bus rails), the EPS protected-load outputs, and the generator input registers. Each group carries a note saying what the measurement actually is.
 - **Trends** (`/performance`) — 48-hour power, 30-day daily energy, 72-hour inverter temperature, 24-hour grid voltage and frequency, and a seven-day battery-bank chart.
 - **Equipment** (`/system`) — health and identity. Cloud status, connection-lost, runtime-data, transport, dongle connectivity and off-grid state; the three inverter temperatures with their explanatory note; operating state, status code, inverter family, device type code and power rating; and the firmware version alongside the firmware `update` entity, shown for awareness only.
@@ -38,14 +38,25 @@ Consumption from the inverter AC-bus equation is labeled **calculated**, never a
 
 Energy charts use the global Energy preferences. The deployer verifies that the selected EG4 lifetime counters remain present even when other solar sources are configured, regardless of source order. It does not certify complete Enphase coverage, counter continuity, or a closed whole-property balance; those require separate validation before updating preferences.
 
-Focused regressions cover unavailable local sources without removing their routes, time-aware runtime copy, inert controls, and Energy preferences containing the separate array before or after EG4. Native desktop/mobile candidate QA is required before deployment; source validation alone is not live acceptance.
+The deployed `2751509` dashboard passed the full native browser matrix on November 4, 2026:
+all **11 routes**, desktop/mobile and light/dark, **44 cases and 164 full-scroll screenshots**.
+This verifies rendering with the observed source states, including unavailable local data; it
+does not establish a working dongle or live cell measurements.
+
+The November 5 copy correction keeps one short local status and a Diagnostics link, moves
+technical detail to Equipment, and hides local tile update ages that could be mistaken for
+outage durations. Numeric values, freshness checks and read-only controls are unchanged.
+The deployed correction passed twelve desktop/mobile light/dark cases across Battery Cells,
+Local Inverter and Equipment, with 44 screenshots and no browser errors. After shortening a
+clipped Battery summary title, the four Cells cases passed again with ten screenshots.
+Representative actual captures were inspected. See [the dated acceptance checklist](QA_CHECKLIST.md).
 
 ## Two data sources: EG4 cloud and the local dongle
 
 This system can be read two ways, and the dashboard is built to show either one or both. They are complementary, not redundant.
 
 - **EG4 cloud** — the third-party `eg4_web_monitor` integration, authenticated with an EG4 account, plant id, and inverter serial. It is the breadth source: it publishes the plant, the aggregate battery bank, and the full set of configuration and schedule entities (charge/discharge windows, SOC cut-offs, grid code) that only the cloud can read. It aggregates the two battery modules into one bank and never returns per-cell detail. This is the source for the cloud equipment views; the Energy view uses shared HA Energy configuration.
-- **Local dongle** — the `eg4_local` integration in this repo (`custom_components/eg4_local`). It talks straight to the EG4/LuxPower WiFi dongle on your own LAN over **TCP port 8000**, with no cloud account and no internet dependency, and surfaces the data the cloud hides: per-cell voltage **max**, **min**, and the max−min **delta** that reads pack balance and health, plus pack capacity, module count, and provisional cell temperatures, cycle count, and pack current. Because it reads the dongle directly, it also keeps working when EG4's servers do not — when the EG4 cloud went down on **2026-09-12**, automation that depended on it went blind and car charging stopped; a local reader survives that.
+- **Local dongle** — the `eg4_local` integration in this repo (`custom_components/eg4_local`). It reads the EG4/LuxPower WiFi dongle on the LAN over **TCP port 8000**, without a cloud account. It reports cell-voltage maximum, minimum and difference, pack capacity, module count, and provisional cell temperatures, cycle count and pack current. It can operate without EG4 cloud service when the dongle and LAN are reachable; an installed local integration alone does not prove that connection is healthy.
 
 **Settings are cloud-only.** The dongle's *hold / parameter* registers — the inverter's settings — are **not** locally readable on this firmware. The local integration reads live telemetry (input registers) only and never synthesizes a settings value. To see or change settings you use the cloud integration and the Home Assistant device pages. This dashboard stays read-only either way.
 
@@ -67,7 +78,7 @@ Two physical battery modules of roughly 14 kWh each are installed. The `eg4_web_
 
 The integration does support per-battery entities. Its `sensor.py` iterates `device_data["batteries"]` and builds a full set of entities for each module it finds. That array is empty here because this config entry is cloud-only — it authenticates against the EG4 monitoring cloud with a username, password, and plant id. The integration's `coordinator_http.py` states that per-battery cell voltages and temperatures come from the local Modbus transport, not from the cloud API, so a cloud-only entry receives the aggregate bank and nothing beneath it.
 
-A BMS cell summary is available, but by a different path than feeding the cloud integration's local transport. The `eg4_local` integration in this repo reads the WiFi dongle directly over TCP/8000 and publishes max/min cell voltage, cell delta, pack capacity, and module count as their own `sensor.eg4_local_*` entities, shown on the **Battery Cells** view (see [Two data sources](#two-data-sources-eg4-cloud-and-the-local-dongle) above). Two honest qualifications remain. First, those figures are separate local sensors, **not** new members of the cloud integration's empty `device_data["batteries"]` array — a cloud-only entry still shows only the aggregate bank described here. Second, some of the BMS fields the dongle exposes — cell temperatures, cycle count, pack current — are **provisional**, and register 67 is still not a battery temperature. The local integration is included and tested offline against a captured register snapshot; deploying and verifying it against this live server is a separate, deliberate step. See [docs/analysis.md](docs/analysis.md) for how the cloud-side limitation was verified three separate ways.
+A BMS cell summary is available, but by a different path than feeding the cloud integration's local transport. The `eg4_local` integration in this repo reads the WiFi dongle directly over TCP/8000 and publishes max/min cell voltage, cell delta, pack capacity, and module count as their own `sensor.eg4_local_*` entities, shown on the **Battery Cells** view (see [Two data sources](#two-data-sources-eg4-cloud-and-the-local-dongle) above). Two honest qualifications remain. First, those figures are separate local sensors, **not** new members of the cloud integration's empty `device_data["batteries"]` array — a cloud-only entry still shows only the aggregate bank described here. Second, some of the BMS fields the dongle exposes — cell temperatures, cycle count, pack current — are **provisional**, and register 67 is still not a battery temperature. The local integration is deployed, but its telemetry was unavailable during the November 4–5 checks. Offline decoder tests and a rendered dashboard do not prove current physical measurements. See [docs/analysis.md](docs/analysis.md) for how the cloud-side limitation was verified three separate ways.
 
 ## Entities the integration disables by default
 
@@ -164,9 +175,13 @@ node deploy.mjs --restore /tmp/eg4-ha-dashboard-*/backup.json --force-restore
 
 ## Visual QA
 
-After deployment, the headless QA runner authenticates with the same long-lived token and visits the dashboard's views at desktop and mobile sizes. It captures overlapping screenshots from top through bottom, repeats Live and Energy in light and dark modes, verifies the sidebar route, and fails on Lovelace or browser errors. Its temporary Chromium profile contains the token only in ephemeral local storage and is removed on exit.
+After deployment, the headless QA runner authenticates with the same long-lived token and captures overlapping desktop/mobile screenshots from top to bottom. Its temporary Chromium profile contains the token only in ephemeral local storage and is removed on exit.
 
-`scripts/visual-qa.mjs` enumerates the routes it visits as a literal list, and that list still holds the four routes of the previous design. It has to be extended to all nine before its report can be read as full coverage; until then it will pass while never opening Solar, Battery, Grid & AC, Configuration, or Station.
+`scripts/visual-qa.mjs` still enumerates four routes, with dark coverage for Live and Energy.
+Its pass alone is partial coverage. The November 4 deployed acceptance used a separate
+read-only native harness that selected all 11 actual deployed routes and checked both themes
+at both widths. That full 44-case result is recorded above; future releases also need full
+coverage rather than treating the standard four-route runner as sufficient.
 
 ```bash
 npm run qa:visual -- --output-dir /tmp/eg4-home-assistant-qa
@@ -186,3 +201,12 @@ The runner defaults to `/usr/bin/chromium-browser`; override with `CHROMIUM_BIN`
 - Backup restore includes checksum and drift guards.
 
 See [QA_CHECKLIST.md](QA_CHECKLIST.md) for release evidence and [docs/analysis.md](docs/analysis.md) for the live data-model analysis and design rationale.
+
+### Local read recovery — November 5, 2026
+
+After the supported Core restart, all 59 local sensor entities became numeric. A new direct
+TCP client with no saved register cache returned 254 of 381 input registers in 20 seconds,
+including PV, battery charge and cell-voltage summary fields; the third bank (starting at 254)
+was missing. This confirms recovery of those key reads, not a complete harvest or independent
+calibration. Partial polls can retain older fields, as described in the local-source diagnostics.
+Seasonal programming remains on the verified cloud interface; no local-register writes were made.

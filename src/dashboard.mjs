@@ -88,6 +88,12 @@ function tiles(entities, specifications, columns = 6) {
   return compact(specifications.map(([key, name, icon]) => tile(entities, key, name, icon, columns)));
 }
 
+function localTiles(entities, specifications) {
+  // HA's relative update age can date a status transition, not the last good
+  // measurement. Keep local values visible without implying an outage duration.
+  return tiles(entities, specifications).map((card) => ({ ...card, state_content: ["state"] }));
+}
+
 function entityRow(entities, key, name, icon) {
   if (!has(entities, key)) return null;
   return { entity: entities[key], name, ...(icon ? { icon } : {}) };
@@ -427,12 +433,7 @@ function disabledEntitiesNote() {
   ].join("\n"));
 }
 
-// The cloud-vs-local explainer that heads the Battery Cells page. It states plainly that
-// the page shows two independent integrations, that the local dongle exposes the per-cell
-// detail the cloud does not, and that either can run alone — Home Assistant's source is
-// simply whichever integration is enabled, so there is no runtime switch to flip. The last
-// line reports whether the local dongle is currently detected, which is how a cloud-only
-// installation learns what it is missing and how to get it.
+// Shared runtime checks drive both concise local headers and Equipment diagnostics.
 function localReportChecks(entityExpression) {
   return `{% set report = states[${entityExpression}] if states[${entityExpression}] is defined else none %}
 {% set reported = as_timestamp(report['last_reported'] if report is not none and report['last_reported'] is defined else report['last_updated'] if report is not none else none, none) %}
@@ -441,20 +442,20 @@ function localReportChecks(entityExpression) {
 {% set fresh = is_number(states(${entityExpression})) and not cached and reported is number and 0 <= age <= 300 %}`;
 }
 
-function localTelemetryStatus(discovery) {
+function localTelemetryStatus(discovery, { details = false } = {}) {
   const local = discovery.local;
+  const unavailable = "Local inverter data is unavailable. [Diagnostics](/eg4-energy/system)";
   if (!local?.installed && !local?.available) {
-    return "**Local dongle integration is not installed.** Local readings are unavailable; cloud equipment readings are separate.";
+    return details
+      ? "**Local dongle integration is not installed.** Local readings are unavailable; cloud equipment readings are separate."
+      : unavailable;
   }
   const entities = ["localSoc", "inverterPower", "gridVoltage", "cellVoltageDelta"]
     .map((key) => local.entities?.[key]).filter(Boolean);
-  if (!entities.length) return "**Local integration installed; no reporting sensors were discovered.** Check the integration's diagnostics.";
-  return `{% set Summary = namespace(fresh=0, cached=0) %}
-{% for entity in ${JSON.stringify(entities)} %}
-${localReportChecks("entity")}
-{% if fresh %}{% set Summary.fresh = Summary.fresh + 1 %}{% endif %}
-{% if cached %}{% set Summary.cached = Summary.cached + 1 %}{% endif %}
-{% endfor %}
+  if (!entities.length) return details
+    ? "**Local integration installed; no reporting sensors were discovered.**"
+    : unavailable;
+  const summary = details ? `
 {% if Summary.fresh == ${entities.length} %}
 **Local telemetry is reporting.** ${entities.length} key readings have numeric HA reports from the last five minutes.
 {% elif Summary.fresh > 0 %}
@@ -464,15 +465,34 @@ ${localReportChecks("entity")}
 {% endif %}
 {% if Summary.cached > 0 %}The integration marks {{ Summary.cached }} key readings as cached; they are not current measurements.{% endif %}
 
-Freshness uses HA report time and the integration's stale flag. It does not establish the sample age of every field retained from a partial poll.`;
+Freshness uses HA report time and the integration's stale flag. It does not establish the sample age of every field retained from a partial poll. The summary readouts also require the expected units.` : `
+{% if Summary.fresh == ${entities.length} %}
+Local inverter data is reporting.
+{% elif Summary.fresh > 0 %}
+Some local inverter readings are unavailable.
+{% else %}
+Local inverter data is unavailable.
+{% endif %}
+[Diagnostics](/eg4-energy/system)`;
+  return `{% set Summary = namespace(fresh=0, cached=0) %}
+{% for entity in ${JSON.stringify(entities)} %}
+${localReportChecks("entity")}
+{% if fresh %}{% set Summary.fresh = Summary.fresh + 1 %}{% endif %}
+{% if cached %}{% set Summary.cached = Summary.cached + 1 %}{% endif %}
+{% endfor %}
+${summary}`;
 }
 
 function localSourceNote(discovery) {
+  return markdown(localTelemetryStatus(discovery));
+}
+
+function localDiagnosticsNote(discovery) {
   return markdown(`**Two data sources**
 
 **EG4 cloud** supplies the inverter, bank, settings, and station views. **Local dongle** supplies direct telemetry and a BMS summary of reported cell-voltage extremes, capacity, and module count.
 
-${localTelemetryStatus(discovery)}
+${localTelemetryStatus(discovery, { details: true })}
 
 Cell max/min/delta summarize the battery bank; they are not a table of individual cell voltages.`);
 }
@@ -485,9 +505,7 @@ function freshLocalReading(entities, key, title, unit) {
   if (!has(entities, key)) return null;
   const entity = JSON.stringify(entities[key]);
   return markdown(`${localReportChecks(entity)}
-**${title}:** {% if fresh and state_attr(${entity}, 'unit_of_measurement') == '${unit}' %}{{ states(${entity}) | float | round(1) }} ${unit}{% else %}Unavailable or stale{% endif %}
-
-{% if cached %}The integration retained a previous value; it is not shown as a current reading.{% elif not fresh %}Waiting for a numeric report no more than five minutes old.{% endif %}`);
+**${title}:** {% if fresh and state_attr(${entity}, 'unit_of_measurement') == '${unit}' %}{{ states(${entity}) | float | round(1) }} ${unit}{% else %}Unavailable{% endif %}`);
 }
 
 // Resolved local entities that are currently reporting nothing, mirroring the cloud
@@ -539,12 +557,11 @@ function batteryCellsView(discovery) {
       gridSection([
         heading("Battery cell summary · local dongle", "mdi:battery-heart-variant"),
         localSourceNote(discovery),
-        localMissingTelemetryCard(le),
       ]),
       gridSection([
         heading("Cell balance", "mdi:battery-sync"),
         freshLocalReading(le, "cellVoltageDelta", "Cell voltage difference", "mV"),
-        ...tiles(le, [
+        ...localTiles(le, [
           ["cellVoltageMax", "Max cell voltage", "mdi:battery-high"],
           ["cellVoltageMin", "Min cell voltage", "mdi:battery-low"],
         ]),
@@ -554,7 +571,7 @@ function batteryCellsView(discovery) {
       ]),
       gridSection([
         heading("Cell voltages and capacity", "mdi:battery-heart-variant"),
-        entitiesCard("BMS voltage extremes and capacity", entityRows(le, [
+        entitiesCard("Battery summary", entityRows(le, [
           ["cellVoltageMax", "Max cell voltage", "mdi:battery-high"],
           ["cellVoltageMin", "Min cell voltage", "mdi:battery-low"],
           ["cellVoltageDelta", "Cell voltage delta (max − min)", "mdi:battery-sync"],
@@ -606,7 +623,6 @@ function localInverterView(discovery) {
       gridSection([
         heading("Local dongle (direct Modbus)", "mdi:lan-connect"),
         markdown(localTelemetryStatus(discovery)),
-        markdown("This page reads local dongle telemetry. Inverter settings are shown separately on Configuration; changing a displayed value requires opening the device settings."),
       ]),
       gridSection([
         heading("Solar strings", "mdi:solar-panel-large"),
@@ -615,7 +631,7 @@ function localInverterView(discovery) {
           series(le, "pv2Power", "String 2", "#fbc02d"),
           series(le, "pv3Power", "String 3", "#fdd835"),
         ]),
-        ...tiles(le, [
+        ...localTiles(le, [
           ["pv1Power", "String 1 power", "mdi:solar-panel"],
           ["pv2Power", "String 2 power", "mdi:solar-panel"],
           ["pv3Power", "String 3 power", "mdi:solar-panel"],
@@ -629,7 +645,7 @@ function localInverterView(discovery) {
       gridSection([
         heading("Battery", "mdi:home-battery"),
         freshLocalReading(le, "localSoc", "State of charge", "%"),
-        ...tiles(le, [
+        ...localTiles(le, [
           ["batteryVoltage", "Battery voltage", "mdi:sine-wave"],
           ["batteryChargePower", "Charge power", "mdi:battery-arrow-up"],
           ["batteryDischargePower", "Discharge power", "mdi:battery-arrow-down"],
@@ -651,7 +667,7 @@ function localInverterView(discovery) {
       gridSection([
         heading("Temperatures", "mdi:thermometer-lines"),
         markdown("These three are the inverter's own sensors — its internal temperature and its two heatsinks. They are inverter readings, not module ones; the reading that reflects the modules is the per-cell BMS figure on the **Battery Cells** page. The inverter-side battery probe is not shown, because the decoder found it untrustworthy on this unit."),
-        ...tiles(le, [
+        ...localTiles(le, [
           ["internalTemperature", "Inverter internal", "mdi:thermometer"],
           ["radiator1Temperature", "Radiator 1 (heatsink)", "mdi:radiator"],
           ["radiator2Temperature", "Radiator 2 (heatsink)", "mdi:radiator"],
@@ -1097,6 +1113,11 @@ export function buildDashboard(discovery) {
             ["dongleConnectivity", "Dongle connectivity", "mdi:wifi"],
             ["offGrid", "Off-grid", "mdi:transmission-tower-off"],
           ]), { stateColor: true }),
+        ]),
+        gridSection([
+          heading("Local diagnostics", "mdi:lan-connect"),
+          localDiagnosticsNote(discovery),
+          localMissingTelemetryCard(discovery.local?.entities ?? {}),
         ]),
         gridSection([
           heading("Inverter temperatures", "mdi:thermometer-lines"),

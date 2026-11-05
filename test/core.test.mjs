@@ -464,12 +464,13 @@ test("the local dongle contract resolves and fills the Battery Cells and Local I
   assert.ok(collectEntityReferences(cells).has(discovery.local.entities.cellVoltageDelta));
 
   const cellsText = stableString(cells);
-  assert.ok(cellsText.includes("Two data sources"), "the cloud-vs-local header must be present");
   assert.ok(cellsText.includes("eg4_local"), "the local integration is named");
-  assert.ok(cellsText.includes("Local telemetry is unavailable or stale"));
+  assert.ok(cellsText.includes("Local inverter data is unavailable"));
   assert.ok(cellsText.includes("last_reported"));
   assert.ok(cellsText.includes("0 <= age <= 300"));
   assert.doesNotMatch(cellsText, /Local dongle: connected|per-cell cards below are live/);
+  const diagnostics = stableString(dashboard.views.find((view) => view.path === "system"));
+  assert.ok(diagnostics.includes("Two data sources"), "source detail stays on Equipment diagnostics");
 
   // The whole thing validates against live state, local references included.
   const result = validateDashboard(dashboard, data.states);
@@ -497,8 +498,9 @@ test("the dashboard builds cloud-only when the local dongle is absent", () => {
   );
 
   const cells = stableString(dashboard.views.find((view) => view.path === "cells"));
-  assert.ok(cells.includes("Two data sources"));
-  assert.ok(cells.includes("Local dongle integration is not installed"));
+  assert.ok(cells.includes("Local inverter data is unavailable"));
+  const diagnostics = stableString(dashboard.views.find((view) => view.path === "system"));
+  assert.ok(diagnostics.includes("Local dongle integration is not installed"));
 
   const references = collectEntityReferences(dashboard);
   assert.ok(![...references].some((entityId) => entityId.startsWith("sensor.eg4_local_")), "no local entity is referenced when the dongle is absent");
@@ -675,8 +677,19 @@ test("registered but unavailable local telemetry keeps routes and never becomes 
     const page = dashboard.views.find((item) => item.path === path);
     assert.ok(page, "an existing local bookmark must remain usable during an outage");
     assert.equal(collectCards(page).some((card) => card.type === "gauge"), false);
-    assert.match(stableString(page), /unavailable or stale/);
+    assert.match(stableString(page), /Local inverter data is unavailable/);
+    assert.ok(stableString(page).includes("[Diagnostics](/eg4-energy/system)"));
+    for (const card of collectCards(page).filter((item) => item.type === "tile")) {
+      assert.deepEqual(card.state_content, ["state"], "local tiles must not imply an outage duration");
+    }
+    assert.doesNotMatch(stableString(page), /Freshness uses HA report time|Waiting for a numeric report|The integration retained a previous value/);
   }
+  const diagnostics = stableString(dashboard.views.find((item) => item.path === "system"));
+  assert.match(diagnostics, /Freshness uses HA report time/);
+  assert.match(diagnostics, /not a table of individual cell voltages/);
+  assert.ok(collectCards(dashboard.views.find((item) => item.path === "live"))
+    .some((card) => card.type === "tile" && card.state_content.includes("last_updated")),
+  "cloud tile timestamps remain unchanged");
   validateDashboard(dashboard, data.states);
 });
 
@@ -688,7 +701,9 @@ test("local integration with no reporting sensor states retains its explanatory 
   assert.equal(discovered.local.hasEntities, false);
   const page = buildDashboard(discovered).views.find((item) => item.path === "local");
   assert.ok(page);
-  assert.match(stableString(page), /no reporting sensors were discovered/);
+  assert.match(stableString(page), /Local inverter data is unavailable/);
+  const diagnostics = buildDashboard(discovered).views.find((item) => item.path === "system");
+  assert.match(stableString(diagnostics), /no reporting sensors were discovered/);
 });
 
 test("equipment copy separates calculated consumption from shared Energy accounting", () => {
